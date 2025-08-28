@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+
+	"rentPro/rentpro-admin/cmd/config"
+	"rentPro/rentpro-admin/cmd/migrate"
+	"rentPro/rentpro-admin/cmd/version"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -15,12 +20,15 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 	Long:         `Cobra is a CLI library for Go that empowers applications.`,
 
-	// Args: func(cmd *cobra.Command, args []string) error {
-	// 	if len(args) < 1 {
-	// 		return errors.New("requires at least one arg")
-	// 	}
-	// 	return nil
-	// },
+	// Args 函数用于验证命令行参数
+	// 要求用户必须提供至少一个子命令（如 version、config 等）
+	// 这确保了用户不能仅运行 "rentpro-admin" 而不指定具体操作
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("请指定一个子命令，如: version, config")
+		}
+		return nil
+	},
 
 	PersistentPreRunE: func(*cobra.Command, []string) error { return nil },
 
@@ -54,14 +62,36 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// func init 用来注册命令
 func init() {
 
-	// rootCmd.AddCommand(api.StartCmd)
-	// rootCmd.AddCommand(migrate.StartCmd)
-	// rootCmd.AddCommand(version.StartCmd)
-	// rootCmd.AddCommand(config.StartCmd)
-	// rootCmd.AddCommand(app.StartCmd)
+	// 注册 migrate 子命令到根命令
+	// migrate.StartCmd 来自 cmd/migrate/server.go，提供数据库迁移功能
+	// 注册后用户可以通过 "rentpro-admin migrate" 来执行数据库迁移操作
+	// 支持的用法: rentpro-admin migrate -c config/settings.yml
+	rootCmd.AddCommand(migrate.StartCmd)
 
+	// 注册 version 子命令到根命令
+	// version.StartCmd 来自 cmd/version/server.go，提供版本信息显示功能
+	// 注册后用户可以通过以下方式查看版本信息：
+	//   - rentpro-admin version           : 显示详细版本信息
+	//   - rentpro-admin migrate -v        : 在migrate命令中显示版本
+	//   - rentpro-admin migrate --version : 在migrate命令中显示版本
+	// 版本信息来源: common/global/adm.go 中的 Version 常量 (当前: "2.2.0")
+	rootCmd.AddCommand(version.StartCmd)
+
+	// 注册 config 子命令到根命令
+	// config.StartCmd 来自 cmd/config/server.go，提供配置信息显示功能
+	// 注册后用户可以通过以下方式查看和验证配置：
+	//   - rentpro-admin config -c config/settings.yml : 显示指定配置文件的内容
+	//   - rentpro-admin config -v                     : 显示config工具版本
+	//   - rentpro-admin config --version               : 显示config工具版本
+	// 功能特性: 支持YAML配置解析、敏感信息隐藏、配置验证等
+	// 配置来源: 读取项目的 settings.yml 配置文件
+	rootCmd.AddCommand(config.StartCmd)
+
+	// rootCmd.AddCommand(app.StartCmd)
+	// rootCmd.AddCommand(api.StartCmd)
 }
 
 // Execute 是命令行应用的入口函数，由main.go调用

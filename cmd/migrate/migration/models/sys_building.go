@@ -1,7 +1,13 @@
 package models
 
-// Building 楼盘模型
+import (
+	"time"
+)
+
+// SysBuildings 楼盘模型
 type SysBuildings struct {
+	// 主键
+	ID uint `json:"id" gorm:"primaryKey;autoIncrement" comment:"主键ID"`
 
 	// 基础信息
 	Name         string `json:"name" gorm:"size:100;not null;index:idx_name" comment:"楼盘名称"`
@@ -23,6 +29,11 @@ type SysBuildings struct {
 	// 管理信息
 	CreatedBy string `json:"created_by" gorm:"size:50" comment:"创建人"`
 	UpdatedBy string `json:"updated_by" gorm:"size:50" comment:"更新人"`
+
+	// 时间戳
+	CreatedAt *time.Time `json:"created_at" gorm:"autoCreateTime" comment:"创建时间"`
+	UpdatedAt *time.Time `json:"updated_at" gorm:"autoUpdateTime" comment:"更新时间"`
+	DeletedAt *time.Time `json:"deleted_at" gorm:"index" comment:"删除时间"`
 }
 
 // TableName 设置表名
