@@ -3,7 +3,7 @@ package version_local
 import (
 	"rentPro/rentpro-admin/cmd/migrate/migration"
 	"rentPro/rentpro-admin/cmd/migrate/migration/models"
-	commonModels "rentPro/rentpro-admin/common/models"
+	commonModels "rentPro/rentpro-admin/common/models/base"
 
 	"gorm.io/gorm"
 )
