@@ -2,7 +2,7 @@ package version
 
 import (
 	"rentPro/rentpro-admin/cmd/migrate/migration"
-	"rentPro/rentpro-admin/common/models"
+	"rentPro/rentpro-admin/common/models/base"
 	"gorm.io/gorm"
 )
 
@@ -20,7 +20,7 @@ func migrate_1756303530910(db *gorm.DB, version string) error {
 	// }
 
 	// 记录迁移完成
-	return db.Create(&models.Migration{
+	return db.Create(&base.Migration{
 		Version: version,
 		Name:    "迁移描述", // TODO: 修改为具体的迁移描述
 		Status:  "completed",

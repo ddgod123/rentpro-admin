@@ -16,7 +16,7 @@ import (
 	_ "rentPro/rentpro-admin/cmd/migrate/migration/version-local"
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/global"
-	"rentPro/rentpro-admin/common/models"
+	"rentPro/rentpro-admin/common/models/base"
 )
 
 // 配置数据结构，用于解析 settings.yml
@@ -187,7 +187,7 @@ func migrateModel() error {
 	fmt.Println("- 创建迁移记录表...")
 
 	// 自动迁移 Migration 模型
-	err := db.Debug().AutoMigrate(&models.Migration{})
+	err := db.Debug().AutoMigrate(&base.Migration{})
 	if err != nil {
 		return fmt.Errorf("迁移 Migration 模型失败: %v", err)
 	}
@@ -247,7 +247,7 @@ func generateMigrationTemplate(packageName, timestamp string) string {
 
 import (
 	"rentPro/rentpro-admin/cmd/migrate/migration"
-	"rentPro/rentpro-admin/common/models"
+	"rentPro/rentpro-admin/common/models/base"
 	"gorm.io/gorm"
 )
 
@@ -265,7 +265,7 @@ func migrate_%s(db *gorm.DB, version string) error {
 	// }
 
 	// 记录迁移完成
-	return db.Create(&models.Migration{
+	return db.Create(&base.Migration{
 		Version: version,
 		Name:    "迁移描述", // TODO: 修改为具体的迁移描述
 		Status:  "completed",

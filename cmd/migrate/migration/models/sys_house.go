@@ -1,6 +1,7 @@
 package models
 
 import (
+	"rentPro/rentpro-admin/common/models/rental"
 	"time"
 )
 
@@ -63,8 +64,8 @@ type SysHouse struct {
 	DeletedAt *time.Time `json:"deleted_at" gorm:"index" comment:"删除时间"`
 
 	// 关联对象(用于GORM关联查询)
-	Building *SysBuildings `json:"building,omitempty" gorm:"-" comment:"所属楼盘"`
-	Agent    *SysAgent     `json:"agent,omitempty" gorm:"-" comment:"负责经纪人"`
+	Building *rental.SysBuildings `json:"building,omitempty" gorm:"-" comment:"所属楼盘"`
+	Agent    *rental.SysAgent     `json:"agent,omitempty" gorm:"-" comment:"负责经纪人"`
 }
 
 // TableName 设置表名

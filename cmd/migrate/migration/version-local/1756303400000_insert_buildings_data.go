@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"rentPro/rentpro-admin/cmd/migrate/migration"
-	commonModels "rentPro/rentpro-admin/common/models"
+	commonModels "rentPro/rentpro-admin/common/models/base"
 	"strings"
 
 	"gorm.io/gorm"

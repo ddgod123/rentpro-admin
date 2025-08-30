@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"rentPro/rentpro-admin/cmd/api"
 	"rentPro/rentpro-admin/cmd/config"
 	"rentPro/rentpro-admin/cmd/migrate"
 	"rentPro/rentpro-admin/cmd/version"
@@ -90,8 +91,15 @@ func init() {
 	// 配置来源: 读取项目的 settings.yml 配置文件
 	rootCmd.AddCommand(config.StartCmd)
 
+	// 注册 api 子命令到根命令
+	// api.StartCmd 来自 cmd/api/server.go，提供HTTP API服务器功能
+	// 注册后用户可以通过以下方式启动API服务器：
+	//   - rentpro-admin api -c config/settings.yml : 使用指定配置文件启动API服务器
+	//   - rentpro-admin api                       : 使用默认配置启动API服务器
+	// 功能特性: 提供完整的权限管理API、用户认证、JWT令牌等
+	// 服务端口: 默认8000（可在config/settings.yml中配置）
+	rootCmd.AddCommand(api.StartCmd)
 	// rootCmd.AddCommand(app.StartCmd)
-	// rootCmd.AddCommand(api.StartCmd)
 }
 
 // Execute 是命令行应用的入口函数，由main.go调用
