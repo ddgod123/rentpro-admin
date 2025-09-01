@@ -31,7 +31,7 @@ func InitAuthTables(db *gorm.DB) error {
 // InitDefaultData 初始化默认数据（从SQL文件读取）
 func InitDefaultData(db *gorm.DB) error {
 	// 创建SQL文件加载器
-	sqlLoader := NewSQLFileLoader("config/data")
+	sqlLoader := NewSQLFileLoader("config/sql/data")
 
 	// 按照依赖关系顺序加载数据文件
 	dataFiles := []string{
@@ -58,7 +58,7 @@ func InitDefaultData(db *gorm.DB) error {
 // ================================================================
 
 // initDefaultDepts 初始化默认部门（已弃用，改为从SQL文件读取）
-// Deprecated: 请使用SQL文件 config/data/sys_dept.sql 替代
+// Deprecated: 请使用SQL文件 config/sql/data/sys_dept.sql 替代
 func initDefaultDepts(db *gorm.DB) error {
 	depts := []system.SysDept{
 		{
@@ -110,7 +110,7 @@ func initDefaultDepts(db *gorm.DB) error {
 }
 
 // initDefaultPosts 初始化默认岗位（已弃用，改为从SQL文件读取）
-// Deprecated: 请使用SQL文件 config/data/sys_post.sql 替代
+// Deprecated: 请使用SQL文件 config/sql/data/sys_post.sql 替代
 func initDefaultPosts(db *gorm.DB) error {
 	posts := []system.SysPost{
 		{

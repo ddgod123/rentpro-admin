@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -14,13 +15,13 @@ import (
 
 // SQLFileLoader SQL文件加载器
 type SQLFileLoader struct {
-	ConfigPath string // 配置文件根路径，默认为 "config/data"
+	ConfigPath string // 配置文件根路径，默认为 "config/sql/data"
 }
 
 // NewSQLFileLoader 创建SQL文件加载器
 func NewSQLFileLoader(configPath string) *SQLFileLoader {
 	if configPath == "" {
-		configPath = "config/data"
+		configPath = "config/sql/data"
 	}
 	return &SQLFileLoader{
 		ConfigPath: configPath,
@@ -40,10 +41,20 @@ func (loader *SQLFileLoader) LoadAndExecuteSQL(db *gorm.DB, filename string) err
 			continue
 		}
 
+		// 检查是否是INSERT语句
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sqlStmt)), "INSERT") {
+			// 对于INSERT语句，先检查是否可以跳过（避免重复插入）
+			if shouldSkipInsert(db, sqlStmt) {
+				fmt.Printf("信息: 跳过已存在的数据插入: %s\n", sqlStmt)
+				continue
+			}
+		}
+
 		if err := db.Exec(sqlStmt).Error; err != nil {
 			// 如果是重复键错误，跳过（防止重复插入）
 			if strings.Contains(err.Error(), "Duplicate entry") ||
 				strings.Contains(err.Error(), "duplicate key") {
+				fmt.Printf("警告: 跳过重复数据插入: %s\n", sqlStmt)
 				continue
 			}
 			return fmt.Errorf("执行SQL语句失败: %v, SQL: %s", err, sqlStmt)
@@ -51,6 +62,208 @@ func (loader *SQLFileLoader) LoadAndExecuteSQL(db *gorm.DB, filename string) err
 	}
 
 	return nil
+}
+
+// shouldSkipInsert 检查是否应该跳过插入语句（避免重复插入数据）
+func shouldSkipInsert(db *gorm.DB, sqlStmt string) bool {
+	// 解析INSERT语句，提取表名和主键值
+	// 检查是否是sys_dept表的插入
+	if strings.Contains(sqlStmt, "sys_dept") && strings.Contains(sqlStmt, "VALUES") {
+		return shouldSkipDeptInsert(db, sqlStmt)
+	}
+
+	// 检查是否是sys_post表的插入
+	if strings.Contains(sqlStmt, "sys_post") && strings.Contains(sqlStmt, "VALUES") {
+		return shouldSkipPostInsert(db, sqlStmt)
+	}
+
+	// 检查是否是sys_role表的插入
+	if strings.Contains(sqlStmt, "sys_role") && strings.Contains(sqlStmt, "VALUES") {
+		return shouldSkipRoleInsert(db, sqlStmt)
+	}
+
+	// 检查是否是sys_menu表的插入
+	if strings.Contains(sqlStmt, "sys_menu") && strings.Contains(sqlStmt, "VALUES") {
+		return shouldSkipMenuInsert(db, sqlStmt)
+	}
+
+	// 检查是否是sys_user表的插入
+	if strings.Contains(sqlStmt, "sys_user") && strings.Contains(sqlStmt, "VALUES") {
+		return shouldSkipUserInsert(db, sqlStmt)
+	}
+
+	// 对于其他表或无法解析的情况，不跳过
+	return false
+}
+
+// shouldSkipDeptInsert 检查是否应该跳过部门数据插入
+func shouldSkipDeptInsert(db *gorm.DB, sqlStmt string) bool {
+	// 提取VALUES部分
+	re := regexp.MustCompile(`VALUES\s*$$[^)]*$$`)
+	matches := re.FindStringSubmatch(sqlStmt)
+	if len(matches) > 0 {
+		valuesPart := matches[0]
+		// 提取每个值组
+		re = regexp.MustCompile(`$$(.*?)$$`)
+		valueGroups := re.FindAllString(valuesPart, -1)
+
+		for _, group := range valueGroups {
+			// 提取第一个值作为ID
+			group = strings.Trim(group, "()")
+			parts := strings.Split(group, ",")
+			if len(parts) > 0 {
+				// 清理ID值（去除空格和引号）
+				idStr := strings.TrimSpace(parts[0])
+				idStr = strings.Trim(idStr, "'\"")
+				id, err := strconv.Atoi(idStr)
+				if err == nil {
+					// 检查该ID是否已存在
+					var count int64
+					db.Table("sys_dept").Where("id = ?", id).Count(&count)
+					if count > 0 {
+						return true // 如果任何一个ID已存在，则跳过整个插入
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldSkipPostInsert 检查是否应该跳过岗位数据插入
+func shouldSkipPostInsert(db *gorm.DB, sqlStmt string) bool {
+	// 提取VALUES部分
+	re := regexp.MustCompile(`VALUES\s*$$[^)]*$$`)
+	matches := re.FindStringSubmatch(sqlStmt)
+	if len(matches) > 0 {
+		valuesPart := matches[0]
+		// 提取每个值组
+		re = regexp.MustCompile(`$$(.*?)$$`)
+		valueGroups := re.FindAllString(valuesPart, -1)
+
+		for _, group := range valueGroups {
+			// 提取第一个值作为ID
+			group = strings.Trim(group, "()")
+			parts := strings.Split(group, ",")
+			if len(parts) > 0 {
+				// 清理ID值（去除空格和引号）
+				idStr := strings.TrimSpace(parts[0])
+				idStr = strings.Trim(idStr, "'\"")
+				id, err := strconv.Atoi(idStr)
+				if err == nil {
+					// 检查该ID是否已存在
+					var count int64
+					db.Table("sys_post").Where("id = ?", id).Count(&count)
+					if count > 0 {
+						return true // 如果任何一个ID已存在，则跳过整个插入
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldSkipRoleInsert 检查是否应该跳过角色数据插入
+func shouldSkipRoleInsert(db *gorm.DB, sqlStmt string) bool {
+	// 提取VALUES部分
+	re := regexp.MustCompile(`VALUES\s*$$[^)]*$$`)
+	matches := re.FindStringSubmatch(sqlStmt)
+	if len(matches) > 0 {
+		valuesPart := matches[0]
+		// 提取每个值组
+		re = regexp.MustCompile(`$$(.*?)$$`)
+		valueGroups := re.FindAllString(valuesPart, -1)
+
+		for _, group := range valueGroups {
+			// 提取第一个值作为ID
+			group = strings.Trim(group, "()")
+			parts := strings.Split(group, ",")
+			if len(parts) > 0 {
+				// 清理ID值（去除空格和引号）
+				idStr := strings.TrimSpace(parts[0])
+				idStr = strings.Trim(idStr, "'\"")
+				id, err := strconv.Atoi(idStr)
+				if err == nil {
+					// 检查该ID是否已存在
+					var count int64
+					db.Table("sys_role").Where("id = ?", id).Count(&count)
+					if count > 0 {
+						return true // 如果任何一个ID已存在，则跳过整个插入
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldSkipMenuInsert 检查是否应该跳过菜单数据插入
+func shouldSkipMenuInsert(db *gorm.DB, sqlStmt string) bool {
+	// 提取VALUES部分
+	re := regexp.MustCompile(`VALUES\s*$$[^)]*$$`)
+	matches := re.FindStringSubmatch(sqlStmt)
+	if len(matches) > 0 {
+		valuesPart := matches[0]
+		// 提取每个值组
+		re = regexp.MustCompile(`$$(.*?)$$`)
+		valueGroups := re.FindAllString(valuesPart, -1)
+
+		for _, group := range valueGroups {
+			// 提取第一个值作为ID
+			group = strings.Trim(group, "()")
+			parts := strings.Split(group, ",")
+			if len(parts) > 0 {
+				// 清理ID值（去除空格和引号）
+				idStr := strings.TrimSpace(parts[0])
+				idStr = strings.Trim(idStr, "'\"")
+				id, err := strconv.Atoi(idStr)
+				if err == nil {
+					// 检查该ID是否已存在
+					var count int64
+					db.Table("sys_menu").Where("id = ?", id).Count(&count)
+					if count > 0 {
+						return true // 如果任何一个ID已存在，则跳过整个插入
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldSkipUserInsert 检查是否应该跳过用户数据插入
+func shouldSkipUserInsert(db *gorm.DB, sqlStmt string) bool {
+	// 提取VALUES部分
+	re := regexp.MustCompile(`VALUES\s*$$[^)]*$$`)
+	matches := re.FindStringSubmatch(sqlStmt)
+	if len(matches) > 0 {
+		valuesPart := matches[0]
+		// 提取每个值组
+		re = regexp.MustCompile(`$$(.*?)$$`)
+		valueGroups := re.FindAllString(valuesPart, -1)
+
+		for _, group := range valueGroups {
+			// 提取第一个值作为ID
+			group = strings.Trim(group, "()")
+			parts := strings.Split(group, ",")
+			if len(parts) > 0 {
+				// 清理ID值（去除空格和引号）
+				idStr := strings.TrimSpace(parts[0])
+				idStr = strings.Trim(idStr, "'\"")
+				id, err := strconv.Atoi(idStr)
+				if err == nil {
+					// 检查该ID是否已存在
+					var count int64
+					db.Table("sys_user").Where("id = ?", id).Count(&count)
+					if count > 0 {
+						return true // 如果任何一个ID已存在，则跳过整个插入
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ReadSQLFromFile 从SQL文件中读取INSERT语句

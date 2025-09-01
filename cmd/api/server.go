@@ -1,212 +1,630 @@
-// Package api 提供RentPro房源管理系统的API服务器功能
-// 包含用户认证、权限管理、租赁管理等核心业务接口
+// Package api 提供HTTP API服务器相关的命令行功能
+// 用于启动 rentpro-admin 系统的HTTP API服务
 package api
 
 import (
+	"context"
 	"fmt"
-	"log"
-
-	"rentPro/rentpro-admin/common/api"
-	"rentPro/rentpro-admin/common/database"
-	"rentPro/rentpro-admin/common/models/base"
-	"rentPro/rentpro-admin/common/router"
-	"rentPro/rentpro-admin/common/service"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
+	"rentPro/rentpro-admin/common/database"
+	"rentPro/rentpro-admin/common/global"
+	"rentPro/rentpro-admin/common/models/system"
+	"rentPro/rentpro-admin/common/utils"
 )
 
-// 全局变量定义
+// 配置数据结构，用于解析 settings.yml
+type Config struct {
+	Settings struct {
+		Application struct {
+			Mode         string `yaml:"mode"`
+			Host         string `yaml:"host"`
+			Name         string `yaml:"name"`
+			Port         int    `yaml:"port"`
+			ReadTimeout  int    `yaml:"readtimeout"`
+			WriteTimeout int    `yaml:"writetimeout"`
+			EnabledDP    bool   `yaml:"enabledp"`
+		} `yaml:"application"`
+		Logger struct {
+			Path      string `yaml:"path"`
+			Stdout    string `yaml:"stdout"`
+			Level     string `yaml:"level"`
+			EnabledDB bool   `yaml:"enableddb"`
+		} `yaml:"logger"`
+		JWT struct {
+			Secret  string `yaml:"secret"`
+			Timeout int    `yaml:"timeout"`
+		} `yaml:"jwt"`
+		Database struct {
+			Driver string `yaml:"driver"`
+			Source string `yaml:"source"`
+		} `yaml:"database"`
+	} `yaml:"settings"`
+}
+
 var (
-	configFile string // 配置文件路径
-	port       string // 服务监听端口
+	configYml   string
+	port        int
+	showVersion bool
+
+	// StartCmd 定义了 api 子命令
+	// 用于启动HTTP API服务器，支持以下功能：
+	// 1. HTTP API服务启动和管理
+	// 2. 数据库连接初始化
+	// 3. 路由配置和中间件
+	// 4. 优雅关闭
+	// 命令注册：通过 rootCmd.AddCommand(api.StartCmd) 注册到根命令
+	// 使用方式：
+	//   - rentpro-admin api -c config/settings.yml : 使用指定配置文件启动API服务器
+	//   - rentpro-admin api -p 8002                : 指定端口启动API服务器
+	//   - rentpro-admin api -v                     : 显示版本信息
+	// 版本信息来源：common/global/adm.go 中的 Version 常量
+	StartCmd = &cobra.Command{
+		Use:     "api",
+		Short:   "启动HTTP API服务器",
+		Long:    `rentpro-admin HTTP API服务器，提供完整的权限管理API、用户认证、JWT令牌等功能`,
+		Example: "rentpro-admin api -c config/settings.yml -p 8002",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			if showVersion {
+				fmt.Printf("rentpro-admin api version: %s\n", global.Version)
+				return
+			}
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if showVersion {
+				return nil
+			}
+			return run()
+		},
+	}
 )
 
-// StartCmd 启动API服务器命令
-// 使用Cobra命令行框架，提供标准的CLI接口
-var StartCmd = &cobra.Command{
-	Use:     "api",
-	Short:   "启动API服务器",
-	Long:    "启动RentPro Admin的API服务器，提供RESTful API接口",
-	Example: "rentpro-admin api -c config/settings.yml -p 8002",
-	RunE:    run,
-}
-
-// init 初始化命令行参数
-// 设置配置文件路径和服务端口等命令行选项
+// init 初始化命令标志
 func init() {
-	// 配置文件路径参数，默认值为 config/settings.yml
-	StartCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config/settings.yml", "配置文件路径")
-	// 服务端口参数，默认值为 8002
-	StartCmd.PersistentFlags().StringVarP(&port, "port", "p", "8002", "服务端口")
+	// 添加版本标志支持
+	StartCmd.PersistentFlags().BoolVarP(&showVersion, "version", "v", false, "显示版本信息")
+
+	// 配置文件路径标志
+	StartCmd.PersistentFlags().StringVarP(&configYml, "config", "c", "config/settings.yml", "指定配置文件路径")
+
+	// 端口标志
+	StartCmd.PersistentFlags().IntVarP(&port, "port", "p", 0, "指定服务端口号")
 }
 
-// run 执行API服务器启动逻辑
-// 这是Cobra命令的核心执行函数
-func run(cmd *cobra.Command, args []string) error {
-	fmt.Printf("正在启动API服务器...\n")
-	fmt.Printf("配置文件: %s\n", configFile)
-	fmt.Printf("服务端口: %s\n", port)
+// run 执行API服务器启动的核心逻辑
+func run() error {
+	fmt.Printf("=== rentpro-admin API服务器 v%s ===\n", global.Version)
 
-	// 初始化数据库连接和基础数据
-	if err := initDatabase(); err != nil {
-		return fmt.Errorf("数据库初始化失败: %v", err)
+	// 加载配置文件
+	config, err := loadConfig(configYml)
+	if err != nil {
+		return fmt.Errorf("加载配置文件失败: %v", err)
 	}
 
-	// 设置Gin框架为生产模式，提高性能
-	gin.SetMode(gin.ReleaseMode)
-
-	// 创建Gin引擎实例
-	r := gin.New()
-
-	// 添加基础中间件
-	r.Use(gin.Logger())   // 请求日志记录
-	r.Use(gin.Recovery()) // 异常恢复处理
-
-	// 添加CORS跨域中间件，支持前端跨域访问
-	r.Use(corsMiddleware())
-
-	// 注册所有API路由
-	registerRoutes(r)
-
-	// 启动HTTP服务器
-	fmt.Printf("🚀 API服务器启动成功！\n")
-	fmt.Printf("📡 监听地址: http://localhost:%s\n", port)
-	fmt.Printf("📖 API文档: http://localhost:%s/swagger/index.html\n", port)
-	fmt.Printf("💡 按 Ctrl+C 停止服务器\n\n")
-
-	// 启动服务器并监听指定端口
-	return r.Run(":" + port)
-}
-
-// initDatabase 初始化数据库连接和基础数据
-// 包括数据库连接、表结构创建、默认数据插入等
-func initDatabase() error {
-	log.Printf("初始化数据库连接...")
-
-	// 建立数据库连接
+	// 初始化数据库连接
+	fmt.Println("初始化数据库连接...")
 	database.Setup()
 
-	// 初始化权限相关的数据表结构
-	// 包括用户、角色、菜单、部门等基础表
-	if err := base.InitAuthTables(database.DB); err != nil {
-		return fmt.Errorf("初始化数据表失败: %v", err)
+	// 设置Gin模式
+	if config.Settings.Application.Mode == "prod" {
+		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// 初始化系统默认数据
-	// 包括默认用户、角色、菜单、权限等基础数据
-	if err := base.InitDefaultData(database.DB); err != nil {
-		return fmt.Errorf("初始化默认数据失败: %v", err)
+	// 创建Gin引擎
+	router := gin.Default()
+
+	// 设置中间件
+	setupMiddleware(router)
+
+	// 设置路由
+	setupRoutes(router)
+
+	// 确定端口
+	serverPort := config.Settings.Application.Port
+	if port > 0 {
+		serverPort = port
 	}
 
-	log.Printf("✅ 数据库初始化完成")
+	// 创建HTTP服务器
+	server := &http.Server{
+		Addr:         fmt.Sprintf("%s:%d", config.Settings.Application.Host, serverPort),
+		Handler:      router,
+		ReadTimeout:  time.Duration(config.Settings.Application.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(config.Settings.Application.WriteTimeout) * time.Second,
+	}
+
+	// 启动服务器
+	fmt.Printf("启动API服务器: %s:%d\n", config.Settings.Application.Host, serverPort)
+	fmt.Printf("应用名称: %s\n", config.Settings.Application.Name)
+	fmt.Printf("运行模式: %s\n", config.Settings.Application.Mode)
+
+	// 在goroutine中启动服务器
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("服务器启动失败: %v\n", err)
+			os.Exit(1)
+		}
+	}()
+
+	// 等待中断信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	fmt.Println("正在关闭服务器...")
+
+	// 优雅关闭
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		fmt.Printf("服务器关闭失败: %v\n", err)
+		return err
+	}
+
+	fmt.Println("✅ 服务器已优雅关闭")
 	return nil
 }
 
-// registerRoutes 注册所有API路由
-// 按照功能模块组织路由结构，包括认证、系统管理、租赁管理等
-func registerRoutes(r *gin.Engine) {
-	// 创建认证控制器实例
-	authController := api.NewAuthController()
-
-	// API根路径分组，所有API都以 /api 开头
-	apiGroup := r.Group("/api")
-
-	// 认证相关路由组（无需认证即可访问）
-	authGroup := apiGroup.Group("/auth")
-	{
-		// 用户登录接口
-		authGroup.POST("/login", authController.Login)
+// loadConfig 加载和解析配置文件
+func loadConfig(configPath string) (*Config, error) {
+	// 检查文件是否存在
+	if !fileExists(configPath) {
+		return nil, fmt.Errorf("配置文件不存在: %s", configPath)
 	}
 
-	// 需要JWT认证的路由组
-	protectedGroup := apiGroup.Group("/auth")
-	protectedGroup.Use(authController.JWTAuthMiddleware()) // 添加JWT认证中间件
-	{
-		// 获取当前用户信息
-		protectedGroup.GET("/user-info", authController.GetUserInfo)
-		// 用户登出
-		protectedGroup.POST("/logout", authController.Logout)
-		// 获取用户菜单权限
-		protectedGroup.GET("/menus", authController.GetMenus)
-		// 检查用户权限
-		protectedGroup.GET("/check-permission", authController.CheckPermission)
+	// 读取配置文件
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	// 管理员专用路由组
-	adminGroup := apiGroup.Group("/admin")
-	adminGroup.Use(authController.JWTAuthMiddleware()) // JWT认证
-	adminGroup.Use(authController.AdminMiddleware())   // 管理员权限验证
-	{
-		// 管理员用户列表接口
-		adminGroup.GET("/users", func(c *gin.Context) {
-			c.JSON(200, gin.H{"msg": "用户列表 - 需要管理员权限"})
-		})
+	// 解析 YAML 配置
+	var config Config
+	err = yaml.Unmarshal(configData, &config)
+	if err != nil {
+		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
-	// 注册动态路由（包含楼盘管理等所有业务路由）
-	registerDynamicRoutes(r, authController)
-
-	// 健康检查接口
-	// 用于监控系统状态和负载均衡器健康检查
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status":  "ok",
-			"service": "rentpro-admin",
-			"version": "1.0.0",
-		})
-	})
-
-	// 根路径接口
-	// 提供API基本信息和服务状态
-	r.GET("/", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message": "欢迎使用 RentPro Admin API",
-			"version": "1.0.0",
-			"docs":    "/swagger/index.html",
-		})
-	})
+	return &config, nil
 }
 
-// registerDynamicRoutes 注册动态路由
-func registerDynamicRoutes(r *gin.Engine, authController *api.AuthController) {
-	fmt.Println("=== 开始注册动态路由 ===")
-
-	// 创建菜单服务
-	menuService := service.NewMenuService(database.DB)
-	fmt.Println("菜单服务创建成功")
-
-	// 创建动态路由生成器
-	dynamicRouter := router.NewDynamicRouter(menuService, authController)
-	fmt.Println("动态路由生成器创建成功")
-
-	// 注册动态路由
-	dynamicRouter.RegisterDynamicRoutes(r)
-	fmt.Println("=== 动态路由注册完成 ===")
-}
-
-// corsMiddleware CORS跨域中间件
-// 处理跨域请求，允许前端应用访问API
-func corsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 允许所有来源的跨域请求
+// setupMiddleware 设置中间件
+func setupMiddleware(router *gin.Engine) {
+	// 添加CORS中间件
+	router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		// 允许的HTTP方法
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-		// 允许的请求头
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		// 暴露给客户端的响应头
-		c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type")
-		// 允许发送Cookie等凭证信息
-		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 
-		// 处理预检请求（OPTIONS方法）
 		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204) // 返回204状态码，表示请求成功但无内容
+			c.AbortWithStatus(204)
 			return
 		}
 
-		// 继续处理下一个中间件或路由处理器
 		c.Next()
+	})
+
+	// 添加日志中间件
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
+}
+
+func setupRoutes(router *gin.Engine) {
+	// 健康检查
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "ok",
+			"version": global.Version,
+			"time":    time.Now().Format(time.RFC3339),
+		})
+	})
+
+	// API版本路由组
+	api := router.Group("/api/v1")
+	{
+		// 用户相关API
+		api.GET("/users", func(c *gin.Context) {
+			// 从数据库查询用户列表
+			var users []map[string]interface{}
+			database.DB.Raw("SELECT id, username, nick_name, email, phone, status, created_at FROM sys_user WHERE deleted_at IS NULL").Scan(&users)
+
+			c.JSON(http.StatusOK, gin.H{
+				"message": "用户列表API",
+				"data":    users,
+				"total":   len(users),
+			})
+		})
+
+		// 认证相关API
+		api.POST("/auth/login", func(c *gin.Context) {
+			// 解析请求体
+			var loginData struct {
+				Username string `json:"username" binding:"required"`
+				Password string `json:"password" binding:"required"`
+			}
+
+			if err := c.ShouldBindJSON(&loginData); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			fmt.Printf("登录请求: username=%s, password=%s\n", loginData.Username, loginData.Password)
+
+			// 从数据库验证用户
+			var user system.SysUser
+			result := database.DB.Where("username = ? AND deleted_at IS NULL", loginData.Username).First(&user)
+
+			fmt.Printf("数据库查询结果: 错误=%v\n", result.Error)
+
+			if result.Error != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "用户名或密码错误",
+				})
+				return
+			}
+
+			// 验证密码
+			if !user.ComparePassword(loginData.Password) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "用户名或密码错误",
+				})
+				return
+			}
+
+			// 获取JWT配置
+			config, err := loadConfig(configYml)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "服务器配置错误",
+				})
+				return
+			}
+
+			// 创建JWT工具
+			jwtUtil := utils.NewJWT(utils.JWTConfig{
+				Secret:  config.Settings.JWT.Secret,
+				Timeout: int64(config.Settings.JWT.Timeout),
+			})
+
+			// 生成token
+			token, err := jwtUtil.GenerateToken(user.ID, user.Username)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "生成token失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 获取用户角色信息
+			var roles []map[string]interface{}
+			if user.RoleID > 0 {
+				database.DB.Raw("SELECT id, name, `key` FROM sys_role WHERE id = ?", user.RoleID).Scan(&roles)
+			}
+
+			// 获取用户权限信息
+			var permissions []string
+			if len(roles) > 0 {
+				roleID := roles[0]["id"]
+				var menuIDs []struct {
+					SysMenuID uint64
+				}
+				database.DB.Raw("SELECT sys_menu_id FROM sys_role_menu WHERE sys_role_id = ?", roleID).Scan(&menuIDs)
+
+				if len(menuIDs) > 0 {
+					var perms []struct {
+						Permission string `json:"permission"`
+					}
+					// 构造IN查询参数
+					menuIDList := make([]uint64, len(menuIDs))
+					for i, item := range menuIDs {
+						menuIDList[i] = item.SysMenuID
+					}
+
+					database.DB.Raw("SELECT permission FROM sys_menu WHERE id IN (?) AND permission IS NOT NULL AND permission != ''", menuIDList).Scan(&perms)
+
+					for _, perm := range perms {
+						permissions = append(permissions, perm.Permission)
+					}
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "登录成功",
+				"data": gin.H{
+					"token": token,
+					"user": gin.H{
+						"id":          user.ID,
+						"username":    user.Username,
+						"nick_name":   user.NickName,
+						"avatar":      user.Avatar,
+						"email":       user.Email,
+						"phone":       user.Phone,
+						"roles":       roles,
+						"permissions": permissions,
+					},
+				},
+			})
+		})
+
+		// 退出登录API
+		api.POST("/auth/logout", func(c *gin.Context) {
+			// 退出登录逻辑：前端清除token即可，后端无需特殊处理
+			// 但我们可以在这里添加一些额外的清理逻辑，如记录登出日志等
+
+			// 获取JWT配置
+			config, err := loadConfig(configYml)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "服务器配置错误",
+				})
+				return
+			}
+
+			// 从请求头获取token
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" {
+				c.JSON(http.StatusOK, gin.H{
+					"code":    200,
+					"message": "退出成功",
+				})
+				return
+			}
+
+			// 解析token
+			tokenString := authHeader[len("Bearer "):]
+
+			// 创建JWT工具
+			jwtUtil := utils.NewJWT(utils.JWTConfig{
+				Secret:  config.Settings.JWT.Secret,
+				Timeout: int64(config.Settings.JWT.Timeout),
+			})
+
+			// 解析token（主要用于验证token有效性）
+			claims, err := jwtUtil.ParseToken(tokenString)
+			if err != nil {
+				// 即使token无效，我们也认为退出成功，因为客户端会清除token
+				c.JSON(http.StatusOK, gin.H{
+					"code":    200,
+					"message": "退出成功",
+				})
+				return
+			}
+
+			// 可以在这里添加登出日志记录
+			fmt.Printf("用户 %s (ID: %d) 已退出登录\n", claims.Username, claims.UserID)
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "退出成功",
+			})
+		})
+
+		// 获取用户信息API
+		api.GET("/auth/userinfo", func(c *gin.Context) {
+			// 从请求头获取token
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未提供认证信息",
+				})
+				return
+			}
+
+			// 解析token
+			tokenString := authHeader[len("Bearer "):]
+
+			// 获取JWT配置
+			config, err := loadConfig(configYml)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "服务器配置错误",
+				})
+				return
+			}
+
+			// 创建JWT工具
+			jwtUtil := utils.NewJWT(utils.JWTConfig{
+				Secret:  config.Settings.JWT.Secret,
+				Timeout: int64(config.Settings.JWT.Timeout),
+			})
+
+			// 解析token
+			claims, err := jwtUtil.ParseToken(tokenString)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "token无效或已过期",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 根据用户ID获取用户信息
+			var user system.SysUser
+			result := database.DB.Where("id = ? AND deleted_at IS NULL", claims.UserID).First(&user)
+			if result.Error != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "用户不存在",
+				})
+				return
+			}
+
+			// 获取用户角色信息
+			var roles []map[string]interface{}
+			if user.RoleID > 0 {
+				database.DB.Raw("SELECT id, name, `key` FROM sys_role WHERE id = ?", user.RoleID).Scan(&roles)
+			}
+
+			// 获取用户权限信息
+			var permissions []string
+			if len(roles) > 0 {
+				roleID := roles[0]["id"]
+				var menuIDs []struct {
+					SysMenuID uint64
+				}
+				database.DB.Raw("SELECT sys_menu_id FROM sys_role_menu WHERE sys_role_id = ?", roleID).Scan(&menuIDs)
+
+				if len(menuIDs) > 0 {
+					var perms []struct {
+						Permission string `json:"permission"`
+					}
+					// 构造IN查询参数
+					menuIDList := make([]uint64, len(menuIDs))
+					for i, item := range menuIDs {
+						menuIDList[i] = item.SysMenuID
+					}
+
+					database.DB.Raw("SELECT permission FROM sys_menu WHERE id IN (?) AND permission IS NOT NULL AND permission != ''", menuIDList).Scan(&perms)
+
+					for _, perm := range perms {
+						permissions = append(permissions, perm.Permission)
+					}
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code": 200,
+				"data": gin.H{
+					"id":          user.ID,
+					"username":    user.Username,
+					"nick_name":   user.NickName,
+					"avatar":      user.Avatar,
+					"email":       user.Email,
+					"phone":       user.Phone,
+					"roles":       roles,
+					"permissions": permissions,
+				},
+				"message": "获取用户信息成功",
+			})
+		})
+
+		// 检查token有效性API
+		api.GET("/auth/check", func(c *gin.Context) {
+			// 从请求头获取token
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未提供认证信息",
+				})
+				return
+			}
+
+			// 解析token
+			tokenString := authHeader[len("Bearer "):]
+
+			// 获取JWT配置
+			config, err := loadConfig(configYml)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "服务器配置错误",
+				})
+				return
+			}
+
+			// 创建JWT工具
+			jwtUtil := utils.NewJWT(utils.JWTConfig{
+				Secret:  config.Settings.JWT.Secret,
+				Timeout: int64(config.Settings.JWT.Timeout),
+			})
+
+			// 解析token
+			claims, err := jwtUtil.ParseToken(tokenString)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "token无效或已过期",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 根据用户ID获取用户信息
+			var user system.SysUser
+			result := database.DB.Where("id = ? AND deleted_at IS NULL", claims.UserID).First(&user)
+			if result.Error != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "用户不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "token有效",
+				"data": gin.H{
+					"user_id":    claims.UserID,
+					"username":   claims.Username,
+					"expires_at": claims.ExpiresAt.Time.Unix(),
+				},
+			})
+		})
+
+		// 系统信息API
+		api.GET("/system/info", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"app_name": "rentpro-admin",
+				"version":  global.Version,
+				"mode":     gin.Mode(),
+			})
+		})
+
+		// 楼盘相关API
+		api.GET("/buildings", func(c *gin.Context) {
+			// 从数据库查询楼盘列表
+			var buildings []map[string]interface{}
+			database.DB.Raw("SELECT id, name FROM sys_buildings LIMIT 5").Scan(&buildings)
+
+			c.JSON(http.StatusOK, gin.H{
+				"message": "楼盘列表API",
+				"data":    buildings,
+				"total":   len(buildings),
+			})
+		})
 	}
+
+	// 根路径
+	router.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "rentpro-admin API服务器",
+			"version": global.Version,
+			"docs":    "/api/v1",
+		})
+	})
+}
+
+// fileExists 检查文件是否存在
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
+// GetAPIVersion 获取API服务器版本信息
+func GetAPIVersion() string {
+	return global.Version
 }

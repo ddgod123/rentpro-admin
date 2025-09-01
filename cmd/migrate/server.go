@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"rentPro/rentpro-admin/cmd/migrate/migration"
-	_ "rentPro/rentpro-admin/cmd/migrate/migration/version-local"
+	_ "rentPro/rentpro-admin/cmd/migrate/migration/version"
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/global"
 	"rentPro/rentpro-admin/common/models/base"

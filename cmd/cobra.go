@@ -99,7 +99,7 @@ func init() {
 	// 功能特性: 提供完整的权限管理API、用户认证、JWT令牌等
 	// 服务端口: 默认8000（可在config/settings.yml中配置）
 	rootCmd.AddCommand(api.StartCmd)
-	// rootCmd.AddCommand(app.StartCmd)
+
 }
 
 // Execute 是命令行应用的入口函数，由main.go调用
