@@ -277,9 +277,14 @@ func (loader *SQLFileLoader) ReadSQLFromFile(filename string) ([]string, error) 
 	// 构造完整的文件路径
 	fullPath := filepath.Join(wd, loader.ConfigPath, filename)
 
+	// 如果文件不存在，尝试使用ConfigPath作为绝对路径
+	if !loader.fileExists(fullPath) {
+		fullPath = filepath.Join(loader.ConfigPath, filename)
+	}
+
 	// 检查文件是否存在
 	if !loader.fileExists(fullPath) {
-		return nil, fmt.Errorf("SQL文件不存在: %s", fullPath)
+		return nil, fmt.Errorf("SQL文件不存在: %s (尝试路径: %s)", filename, fullPath)
 	}
 
 	// 读取文件内容

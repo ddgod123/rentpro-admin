@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -596,14 +597,234 @@ func setupRoutes(router *gin.Engine) {
 
 		// 楼盘相关API
 		api.GET("/buildings", func(c *gin.Context) {
-			// 从数据库查询楼盘列表
+			// 获取查询参数
+			page := c.DefaultQuery("page", "1")
+			pageSize := c.DefaultQuery("pageSize", "10")
+			name := c.Query("name")
+			district := c.Query("district")
+			businessArea := c.Query("business_area")
+			status := c.Query("status")
+
+			// 转换分页参数
+			pageNum, _ := strconv.Atoi(page)
+			size, _ := strconv.Atoi(pageSize)
+
+			if pageNum < 1 {
+				pageNum = 1
+			}
+			if size < 1 {
+				size = 10
+			}
+			if size > 100 {
+				size = 100 // 限制最大页面大小
+			}
+
+			// 构造查询条件
+			offset := (pageNum - 1) * size
+
+			// 构造SQL查询
+			query := "SELECT id, name, district, business_area, property_type, status, created_at FROM sys_buildings WHERE 1=1"
+			countQuery := "SELECT COUNT(*) FROM sys_buildings WHERE 1=1"
+
+			// 添加搜索条件
+			var args []interface{}
+			if name != "" {
+				query += " AND name LIKE ?"
+				countQuery += " AND name LIKE ?"
+				args = append(args, "%"+name+"%")
+			}
+			if district != "" {
+				query += " AND district LIKE ?"
+				countQuery += " AND district LIKE ?"
+				args = append(args, "%"+district+"%")
+			}
+			if businessArea != "" {
+				query += " AND business_area LIKE ?"
+				countQuery += " AND business_area LIKE ?"
+				args = append(args, "%"+businessArea+"%")
+			}
+			if status != "" {
+				query += " AND status = ?"
+				countQuery += " AND status = ?"
+				args = append(args, status)
+			}
+
+			// 添加排序和分页
+			query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+			args = append(args, size, offset)
+
+			// 执行查询
 			var buildings []map[string]interface{}
-			database.DB.Raw("SELECT id, name FROM sys_buildings LIMIT 5").Scan(&buildings)
+			database.DB.Raw(query, args...).Scan(&buildings)
+
+			// 查询总数
+			var total int64
+			database.DB.Raw(countQuery, args[:len(args)-2]...).Scan(&total)
 
 			c.JSON(http.StatusOK, gin.H{
-				"message": "楼盘列表API",
+				"code":    200,
+				"message": "楼盘列表获取成功",
 				"data":    buildings,
-				"total":   len(buildings),
+				"total":   total,
+				"page":    pageNum,
+				"size":    size,
+			})
+		})
+
+		// 获取单个楼盘详情
+		api.GET("/buildings/:id", func(c *gin.Context) {
+			id := c.Param("id")
+
+			var building map[string]interface{}
+			result := database.DB.Table("sys_buildings").Where("id = ?", id).First(&building)
+
+			if result.Error != nil {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "楼盘不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取成功",
+				"data":    building,
+			})
+		})
+
+		// 创建楼盘
+		api.POST("/buildings", func(c *gin.Context) {
+			// 解析请求体
+			var buildingData struct {
+				Name         string `json:"name" binding:"required"`
+				District     string `json:"district" binding:"required"`
+				BusinessArea string `json:"businessArea"`
+				PropertyType string `json:"propertyType"`
+				Status       string `json:"status"`
+				Description  string `json:"description"`
+			}
+
+			if err := c.ShouldBindJSON(&buildingData); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 插入数据库
+			result := database.DB.Exec(
+				"INSERT INTO sys_buildings (name, district, business_area, property_type, status, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+				buildingData.Name,
+				buildingData.District,
+				buildingData.BusinessArea,
+				buildingData.PropertyType,
+				buildingData.Status,
+				buildingData.Description,
+			)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "创建楼盘失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "创建成功",
+			})
+		})
+
+		// 更新楼盘
+		api.PUT("/buildings/:id", func(c *gin.Context) {
+			id := c.Param("id")
+
+			// 解析请求体
+			var buildingData struct {
+				Name         string `json:"name"`
+				District     string `json:"district"`
+				BusinessArea string `json:"businessArea"`
+				PropertyType string `json:"propertyType"`
+				Status       string `json:"status"`
+				Description  string `json:"description"`
+			}
+
+			if err := c.ShouldBindJSON(&buildingData); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 更新数据库
+			result := database.DB.Exec(
+				"UPDATE sys_buildings SET name = ?, district = ?, business_area = ?, property_type = ?, status = ?, description = ?, updated_at = NOW() WHERE id = ?",
+				buildingData.Name,
+				buildingData.District,
+				buildingData.BusinessArea,
+				buildingData.PropertyType,
+				buildingData.Status,
+				buildingData.Description,
+				id,
+			)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "更新楼盘失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			if result.RowsAffected == 0 {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "楼盘不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "更新成功",
+			})
+		})
+
+		// 删除楼盘
+		api.DELETE("/buildings/:id", func(c *gin.Context) {
+			id := c.Param("id")
+
+			// 删除数据库记录
+			result := database.DB.Exec("DELETE FROM sys_buildings WHERE id = ?", id)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "删除楼盘失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			if result.RowsAffected == 0 {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "楼盘不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "删除成功",
 			})
 		})
 	}
