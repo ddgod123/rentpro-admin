@@ -12,8 +12,6 @@ package rental
 
 */
 
-
-
 import (
 	"time"
 )
@@ -29,7 +27,7 @@ type SysHouseType struct {
 	Description string `json:"description" gorm:"type:text" comment:"户型描述"`
 
 	// 楼盘关联
-	BuildingID uint        `json:"building_id" gorm:"not null;index:idx_building_id" comment:"所属楼盘ID"`
+	BuildingID uint         `json:"building_id" gorm:"not null;index:idx_building_id" comment:"所属楼盘ID"`
 	Building   SysBuildings `json:"building,omitempty" gorm:"foreignKey:BuildingID" comment:"所属楼盘"`
 
 	// 户型规格
@@ -51,23 +49,23 @@ type SysHouseType struct {
 	RentPricePer float64 `json:"rent_price_per" gorm:"type:decimal(6,2);default:0" comment:"租金单价(元/平方米/月)"`
 
 	// 库存信息
-	TotalStock   int `json:"total_stock" gorm:"not null;default:0" comment:"总库存"`
-	SaleStock    int `json:"sale_stock" gorm:"not null;default:0" comment:"在售库存"`
-	RentStock    int `json:"rent_stock" gorm:"not null;default:0" comment:"在租库存"`
+	TotalStock    int `json:"total_stock" gorm:"not null;default:0" comment:"总库存"`
+	SaleStock     int `json:"sale_stock" gorm:"not null;default:0" comment:"在售库存"`
+	RentStock     int `json:"rent_stock" gorm:"not null;default:0" comment:"在租库存"`
 	ReservedStock int `json:"reserved_stock" gorm:"not null;default:0" comment:"已预订库存"`
 
 	// 状态信息
-	Status      string `json:"status" gorm:"size:20;not null;default:'active';index:idx_status" comment:"状态(active:在售/租, inactive:停用, pending:审核中)"`
-	SaleStatus  string `json:"sale_status" gorm:"size:20;default:'available'" comment:"销售状态(available:可售, sold:已售, reserved:已预订)"`
-	RentStatus  string `json:"rent_status" gorm:"size:20;default:'available'" comment:"租赁状态(available:可租, rented:已租, reserved:已预订)"`
-	IsHot       bool   `json:"is_hot" gorm:"default:false;index:idx_is_hot" comment:"是否热门户型"`
+	Status     string `json:"status" gorm:"size:20;not null;default:'active';index:idx_status" comment:"状态(active:在售/租, inactive:停用, pending:审核中)"`
+	SaleStatus string `json:"sale_status" gorm:"size:20;default:'available'" comment:"销售状态(available:可售, sold:已售, reserved:已预订)"`
+	RentStatus string `json:"rent_status" gorm:"size:20;default:'available'" comment:"租赁状态(available:可租, rented:已租, reserved:已预订)"`
+	IsHot      bool   `json:"is_hot" gorm:"default:false;index:idx_is_hot" comment:"是否热门户型"`
 
 	// 图片信息
-	MainImage   string   `json:"main_image" gorm:"size:500" comment:"主图URL"`
-	ImageUrls   []string `json:"image_urls" gorm:"type:json" comment:"图片URL列表"`
+	MainImage string   `json:"main_image" gorm:"size:500" comment:"主图URL"`
+	ImageUrls []string `json:"image_urls" gorm:"type:json" comment:"图片URL列表"`
 
 	// 特色标签
-	Tags        []string `json:"tags" gorm:"type:json" comment:"特色标签(南北通透/精装修/地铁房等)"`
+	Tags []string `json:"tags" gorm:"type:json" comment:"特色标签(南北通透/精装修/地铁房等)"`
 
 	// 管理信息
 	CreatedBy string `json:"created_by" gorm:"size:50" comment:"创建人"`

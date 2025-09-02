@@ -18,6 +18,7 @@ import (
 
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/global"
+	"rentPro/rentpro-admin/common/models/rental"
 	"rentPro/rentpro-admin/common/models/system"
 	"rentPro/rentpro-admin/common/utils"
 )
@@ -825,6 +826,56 @@ func setupRoutes(router *gin.Engine) {
 			c.JSON(http.StatusOK, gin.H{
 				"code":    200,
 				"message": "删除成功",
+			})
+		})
+
+		// 获取区域列表
+		api.GET("/districts", func(c *gin.Context) {
+			var districts []rental.District
+			result := database.DB.Where("status = ?", "active").Order("sort ASC, id ASC").Find(&districts)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取区域列表失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取区域列表成功",
+				"data":    districts,
+			})
+		})
+
+		// 获取商圈列表
+		api.GET("/business-areas", func(c *gin.Context) {
+			districtId := c.Query("districtId")
+
+			var businessAreas []rental.BusinessArea
+			query := database.DB.Where("status = ?", "active")
+
+			if districtId != "" {
+				query = query.Where("district_id = ?", districtId)
+			}
+
+			result := query.Order("sort ASC, id ASC").Find(&businessAreas)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取商圈列表失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取商圈列表成功",
+				"data":    businessAreas,
 			})
 		})
 	}
