@@ -1,10 +1,11 @@
 package rental
 
 import (
+	"fmt"
 	"time"
 )
 
-// SysHouse 房屋模型
+// SysHouse 房屋模型 - 具体房屋实例
 type SysHouse struct {
 	// 主键
 	ID uint `json:"id" gorm:"primaryKey;autoIncrement" comment:"主键ID"`
@@ -13,35 +14,33 @@ type SysHouse struct {
 	Name string `json:"name" gorm:"size:100;not null;index:idx_name" comment:"房屋名称"`
 	Code string `json:"code" gorm:"size:50;not null;uniqueIndex:idx_code" comment:"房屋编码"`
 
-	// 楼盘关联
-	BuildingID uint         `json:"buildingId" gorm:"not null;index:idx_building_id" comment:"所属楼盘ID"`
-	Building   SysBuildings `json:"building,omitempty" gorm:"foreignKey:BuildingID" comment:"所属楼盘"`
+	// 关联关系
+	BuildingID  uint         `json:"buildingId" gorm:"not null;index:idx_building_id" comment:"所属楼盘ID"`
+	Building    SysBuildings `json:"building,omitempty" gorm:"foreignKey:BuildingID" comment:"所属楼盘"`
+	HouseTypeID uint         `json:"houseTypeId" gorm:"not null;index:idx_house_type_id" comment:"所属户型ID"`
+	HouseType   SysHouseType `json:"houseType,omitempty" gorm:"foreignKey:HouseTypeID" comment:"所属户型"`
 
 	// 房屋位置
 	Floor      int    `json:"floor" comment:"楼层"`
 	Unit       string `json:"unit" gorm:"size:20" comment:"单元号"`
 	RoomNumber string `json:"roomNumber" gorm:"size:20" comment:"房号"`
 
-	// 房屋规格
-	Area       float64 `json:"area" gorm:"type:decimal(8,2);not null;index:idx_area" comment:"建筑面积(平方米)"`
-	UsableArea float64 `json:"usableArea" gorm:"type:decimal(8,2)" comment:"使用面积(平方米)"`
-	Rooms      int     `json:"rooms" gorm:"not null;default:1" comment:"房间数"`
-	Halls      int     `json:"halls" gorm:"not null;default:1" comment:"客厅数"`
-	Bathrooms  int     `json:"bathrooms" gorm:"not null;default:1" comment:"卫生间数"`
-	Balconies  int     `json:"balconies" gorm:"default:0" comment:"阳台数"`
+	// 实际规格信息（可能与户型标准规格有差异）
+	ActualArea       float64 `json:"actualArea" gorm:"type:decimal(8,2)" comment:"实际建筑面积(平方米)"`
+	ActualUsableArea float64 `json:"actualUsableArea" gorm:"type:decimal(8,2)" comment:"实际使用面积(平方米)"`
 
-	// 朝向信息
-	Orientation string `json:"orientation" gorm:"size:50" comment:"朝向(南北/东西/南向/北向等)"`
-	View        string `json:"view" gorm:"size:100" comment:"景观(海景/山景/城市景观等)"`
+	// 实际朝向和景观（可能与户型标准不同）
+	ActualOrientation string `json:"actualOrientation" gorm:"size:50" comment:"实际朝向"`
+	ActualView        string `json:"actualView" gorm:"size:100" comment:"实际景观"`
 
 	// 装修信息
 	Decoration string `json:"decoration" gorm:"size:50" comment:"装修情况(毛坯/简装/精装/豪装)"`
 
-	// 价格信息
-	SalePrice    float64 `json:"salePrice" gorm:"type:decimal(12,2);default:0;index:idx_sale_price" comment:"售价(元)"`
-	RentPrice    float64 `json:"rentPrice" gorm:"type:decimal(8,2);default:0;index:idx_rent_price" comment:"月租金(元)"`
-	SalePricePer float64 `json:"salePricePer" gorm:"type:decimal(8,2);default:0" comment:"单价(元/平方米)"`
-	RentPricePer float64 `json:"rentPricePer" gorm:"type:decimal(6,2);default:0" comment:"租金单价(元/平方米/月)"`
+	// 价格信息（基于户型基准价格的实际价格）
+	ActualSalePrice       float64 `json:"actualSalePrice" gorm:"type:decimal(12,2);default:0;index:idx_actual_sale_price" comment:"实际售价(元)"`
+	ActualRentPrice       float64 `json:"actualRentPrice" gorm:"type:decimal(8,2);default:0;index:idx_actual_rent_price" comment:"实际月租金(元)"`
+	PriceAdjustment       float64 `json:"priceAdjustment" gorm:"type:decimal(8,2);default:0" comment:"价格调整金额(元)"`
+	PriceAdjustmentReason string  `json:"priceAdjustmentReason" gorm:"size:200" comment:"价格调整原因"`
 
 	// 状态信息
 	Status     string `json:"status" gorm:"size:20;not null;default:'available';index:idx_status" comment:"状态(available:可租/售, rented:已租, sold:已售, maintenance:维护中, inactive:停用)"`
@@ -147,4 +146,49 @@ func (h *SysHouse) IsAvailableForSale() bool {
 // IsAvailableForRent 判断是否可租
 func (h *SysHouse) IsAvailableForRent() bool {
 	return h.Status == "available" && h.RentStatus == "available"
+}
+
+// GetFullAddress 获取房屋完整地址
+func (h *SysHouse) GetFullAddress() string {
+	if h.Unit != "" && h.RoomNumber != "" {
+		return fmt.Sprintf("%s单元%s室", h.Unit, h.RoomNumber)
+	} else if h.RoomNumber != "" {
+		return h.RoomNumber
+	}
+	return ""
+}
+
+// GetEffectiveArea 获取有效面积（优先使用实际面积）
+func (h *SysHouse) GetEffectiveArea() float64 {
+	if h.ActualArea > 0 {
+		return h.ActualArea
+	}
+	// 如果没有实际面积，从户型获取标准面积
+	if h.HouseType.StandardArea > 0 {
+		return h.HouseType.StandardArea
+	}
+	return 0
+}
+
+// GetEffectiveSalePrice 获取有效售价
+func (h *SysHouse) GetEffectiveSalePrice() float64 {
+	if h.ActualSalePrice > 0 {
+		return h.ActualSalePrice
+	}
+	// 如果没有设置实际价格，使用户型基准价格
+	return h.HouseType.BaseSalePrice + h.PriceAdjustment
+}
+
+// GetEffectiveRentPrice 获取有效租金
+func (h *SysHouse) GetEffectiveRentPrice() float64 {
+	if h.ActualRentPrice > 0 {
+		return h.ActualRentPrice
+	}
+	// 如果没有设置实际价格，使用户型基准价格
+	return h.HouseType.BaseRentPrice + h.PriceAdjustment
+}
+
+// IsCustomPricing 判断是否使用了自定义定价
+func (h *SysHouse) IsCustomPricing() bool {
+	return h.ActualSalePrice > 0 || h.ActualRentPrice > 0 || h.PriceAdjustment != 0
 }
