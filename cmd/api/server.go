@@ -961,6 +961,167 @@ func setupRoutes(router *gin.Engine) {
 			})
 		})
 
+		// 新增户型
+		api.POST("/house-types", func(c *gin.Context) {
+			// 解析请求体
+			var houseTypeData struct {
+				Name         string  `json:"name" binding:"required,min=1,max=100"`
+				Code         string  `json:"code" binding:"required,max=50"`
+				StandardArea float64 `json:"standard_area" binding:"required,gt=0"`
+				BuildingID   uint    `json:"building_id" binding:"required,gt=0"`
+
+				// 选填字段
+				Rooms               *int     `json:"rooms,omitempty"`
+				Halls               *int     `json:"halls,omitempty"`
+				Bathrooms           *int     `json:"bathrooms,omitempty"`
+				Balconies           *int     `json:"balconies,omitempty"`
+				FloorHeight         *float64 `json:"floor_height,omitempty"`
+				StandardOrientation *string  `json:"standard_orientation,omitempty"`
+				StandardView        *string  `json:"standard_view,omitempty"`
+				BaseSalePrice       *float64 `json:"base_sale_price,omitempty"`
+				BaseRentPrice       *float64 `json:"base_rent_price,omitempty"`
+				Description         *string  `json:"description,omitempty"`
+				Status              *string  `json:"status,omitempty"`
+				IsHot               *bool    `json:"is_hot,omitempty"`
+				MainImage           *string  `json:"main_image,omitempty"`
+				FloorPlanUrl        *string  `json:"floor_plan_url,omitempty"`
+			}
+
+			if err := c.ShouldBindJSON(&houseTypeData); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 验证楼盘是否存在
+			var buildingExists int64
+			database.DB.Raw("SELECT COUNT(*) FROM sys_buildings WHERE id = ? AND deleted_at IS NULL", houseTypeData.BuildingID).Scan(&buildingExists)
+			if buildingExists == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "所选楼盘不存在",
+				})
+				return
+			}
+
+			// 检查户型编码在同一楼盘内是否唯一
+			var codeExists int64
+			database.DB.Raw("SELECT COUNT(*) FROM sys_house_types WHERE building_id = ? AND code = ? AND deleted_at IS NULL", houseTypeData.BuildingID, houseTypeData.Code).Scan(&codeExists)
+			if codeExists > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "该楼盘下户型编码已存在",
+				})
+				return
+			}
+
+			// 设置默认值
+			rooms := 1
+			halls := 1
+			bathrooms := 1
+			balconies := 0
+			status := "active"
+			isHot := false
+
+			if houseTypeData.Rooms != nil {
+				rooms = *houseTypeData.Rooms
+			}
+			if houseTypeData.Halls != nil {
+				halls = *houseTypeData.Halls
+			}
+			if houseTypeData.Bathrooms != nil {
+				bathrooms = *houseTypeData.Bathrooms
+			}
+			if houseTypeData.Balconies != nil {
+				balconies = *houseTypeData.Balconies
+			}
+			if houseTypeData.Status != nil {
+				status = *houseTypeData.Status
+			}
+			if houseTypeData.IsHot != nil {
+				isHot = *houseTypeData.IsHot
+			}
+
+			// 计算单价
+			var baseSalePricePer, baseRentPricePer float64
+			if houseTypeData.BaseSalePrice != nil {
+				baseSalePricePer = *houseTypeData.BaseSalePrice / houseTypeData.StandardArea
+			}
+			if houseTypeData.BaseRentPrice != nil {
+				baseRentPricePer = *houseTypeData.BaseRentPrice / houseTypeData.StandardArea
+			}
+
+			// 构造插入SQL
+			insertSQL := `
+				INSERT INTO sys_house_types (
+					name, code, building_id, standard_area, rooms, halls, bathrooms, balconies,
+					floor_height, standard_orientation, standard_view,
+					base_sale_price, base_rent_price, base_sale_price_per, base_rent_price_per,
+					description, status, is_hot, main_image, floor_plan_url,
+					total_stock, available_stock, sold_stock, rented_stock, reserved_stock,
+					created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NOW(), NOW())`
+
+			result := database.DB.Exec(insertSQL,
+				houseTypeData.Name,
+				houseTypeData.Code,
+				houseTypeData.BuildingID,
+				houseTypeData.StandardArea,
+				rooms,
+				halls,
+				bathrooms,
+				balconies,
+				houseTypeData.FloorHeight,
+				houseTypeData.StandardOrientation,
+				houseTypeData.StandardView,
+				houseTypeData.BaseSalePrice,
+				houseTypeData.BaseRentPrice,
+				baseSalePricePer,
+				baseRentPricePer,
+				houseTypeData.Description,
+				status,
+				isHot,
+				houseTypeData.MainImage,
+				houseTypeData.FloorPlanUrl,
+			)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "创建户型失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			// 获取新创建的户型ID
+			var newID int64
+			database.DB.Raw("SELECT LAST_INSERT_ID()").Scan(&newID)
+
+			// 返回新创建的户型信息
+			var newHouseType map[string]interface{}
+			database.DB.Raw(`
+				SELECT 
+					id, name, code, description, building_id,
+					standard_area, rooms, halls, bathrooms, balconies, floor_height,
+					standard_orientation, standard_view,
+					base_sale_price, base_rent_price, base_sale_price_per, base_rent_price_per,
+					total_stock, available_stock, sold_stock, rented_stock, reserved_stock,
+					status, is_hot, main_image, floor_plan_url,
+					created_at, updated_at
+				FROM sys_house_types 
+				WHERE id = ?`, newID).Scan(&newHouseType)
+
+			c.JSON(http.StatusCreated, gin.H{
+				"code":    201,
+				"message": "户型创建成功",
+				"data":    newHouseType,
+			})
+		})
+
 		// 获取区域列表
 		api.GET("/districts", func(c *gin.Context) {
 			var districts []rental.District
