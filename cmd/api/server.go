@@ -829,6 +829,138 @@ func setupRoutes(router *gin.Engine) {
 			})
 		})
 
+		// 获取楼盘的户型列表
+		api.GET("/house-types/building/:buildingId", func(c *gin.Context) {
+			buildingID := c.Param("buildingId")
+			page := c.DefaultQuery("page", "1")
+			pageSize := c.DefaultQuery("pageSize", "10")
+
+			// 转换分页参数
+			pageNum, err := strconv.Atoi(page)
+			if err != nil || pageNum < 1 {
+				pageNum = 1
+			}
+			size, err := strconv.Atoi(pageSize)
+			if err != nil || size < 1 {
+				size = 10
+			}
+
+			// 构造查询
+			offset := (pageNum - 1) * size
+
+			query := `
+				SELECT 
+					id, name, code, description, building_id,
+					standard_area, rooms, halls, bathrooms, balconies, floor_height,
+					standard_orientation, standard_view,
+					base_sale_price, base_rent_price, base_sale_price_per, base_rent_price_per,
+					total_stock, available_stock, sold_stock, rented_stock, reserved_stock,
+					status, is_hot, main_image, floor_plan_url,
+					created_at, updated_at
+				FROM sys_house_types 
+				WHERE building_id = ? AND deleted_at IS NULL
+				ORDER BY id DESC 
+				LIMIT ? OFFSET ?`
+
+			countQuery := `
+				SELECT COUNT(*) 
+				FROM sys_house_types 
+				WHERE building_id = ? AND deleted_at IS NULL`
+
+			// 执行查询
+			var houseTypes []map[string]interface{}
+			database.DB.Raw(query, buildingID, size, offset).Scan(&houseTypes)
+
+			// 查询总数
+			var total int64
+			database.DB.Raw(countQuery, buildingID).Scan(&total)
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "户型列表获取成功",
+				"data":    houseTypes,
+				"total":   total,
+				"page":    pageNum,
+				"size":    size,
+			})
+		})
+
+		// 获取楼盘基础信息
+		api.GET("/buildings/:id/info", func(c *gin.Context) {
+			id := c.Param("id")
+
+			var building map[string]interface{}
+			result := database.DB.Raw(`
+				SELECT id, name, district, business_area, property_type, 
+					   detailed_address, property_company, status, is_hot
+				FROM sys_buildings 
+				WHERE id = ? AND deleted_at IS NULL`, id).Scan(&building)
+
+			if result.Error != nil {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "楼盘不存在",
+				})
+				return
+			}
+
+			if len(building) == 0 {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "楼盘不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取成功",
+				"data":    building,
+			})
+		})
+
+		// 删除户型
+		api.DELETE("/house-types/:id", func(c *gin.Context) {
+			id := c.Param("id")
+
+			// 检查是否有关联的房屋
+			var houseCount int64
+			database.DB.Raw("SELECT COUNT(*) FROM sys_houses WHERE house_type_id = ? AND deleted_at IS NULL", id).Scan(&houseCount)
+
+			if houseCount > 0 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": fmt.Sprintf("该户型下还有 %d 套房屋，无法删除", houseCount),
+				})
+				return
+			}
+
+			// 软删除户型
+			result := database.DB.Exec("UPDATE sys_house_types SET deleted_at = NOW() WHERE id = ?", id)
+
+			if result.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "删除户型失败",
+					"error":   result.Error.Error(),
+				})
+				return
+			}
+
+			if result.RowsAffected == 0 {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "户型不存在",
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "删除成功",
+			})
+		})
+
 		// 获取区域列表
 		api.GET("/districts", func(c *gin.Context) {
 			var districts []rental.District
