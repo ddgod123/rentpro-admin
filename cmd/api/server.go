@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -221,6 +223,9 @@ func setupMiddleware(router *gin.Engine) {
 }
 
 func setupRoutes(router *gin.Engine) {
+	// 静态文件服务
+	router.Static("/uploads", "./uploads")
+
 	// 健康检查
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -1119,6 +1124,154 @@ func setupRoutes(router *gin.Engine) {
 				"code":    201,
 				"message": "户型创建成功",
 				"data":    newHouseType,
+			})
+		})
+
+		// 上传户型图
+		api.POST("/upload/floor-plan", func(c *gin.Context) {
+			// 获取户型ID
+			houseTypeID := c.PostForm("house_type_id")
+			if houseTypeID == "" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "缺少户型ID参数",
+				})
+				return
+			}
+
+			// 检查户型是否存在
+			var houseType rental.SysHouseType
+			result := database.DB.Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
+			if result.Error != nil {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "户型不存在",
+				})
+				return
+			}
+
+			// 获取上传的文件
+			file, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "获取上传文件失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 检查文件类型
+			if !strings.HasPrefix(file.Header.Get("Content-Type"), "image/") {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "只支持图片文件",
+				})
+				return
+			}
+
+			// 检查文件大小（5MB）
+			if file.Size > 5*1024*1024 {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "文件大小不能超过5MB",
+				})
+				return
+			}
+
+			// 生成文件名
+			ext := filepath.Ext(file.Filename)
+			if ext == "" {
+				ext = ".jpg"
+			}
+			fileName := fmt.Sprintf("floor_plan_%s_%d%s", houseTypeID, time.Now().Unix(), ext)
+
+			// 确保上传目录存在
+			uploadDir := "uploads/floor-plans"
+			if err := os.MkdirAll(uploadDir, 0755); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "创建上传目录失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 保存文件
+			filePath := filepath.Join(uploadDir, fileName)
+			if err := c.SaveUploadedFile(file, filePath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "保存文件失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 生成访问URL
+			fileURL := fmt.Sprintf("/uploads/floor-plans/%s", fileName)
+
+			// 更新数据库中的户型图URL
+			updateResult := database.DB.Model(&houseType).Update("floor_plan_url", fileURL)
+			if updateResult.Error != nil {
+				// 删除已上传的文件
+				os.Remove(filePath)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "更新数据库失败",
+					"error":   updateResult.Error.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "户型图上传成功",
+				"data": gin.H{
+					"url":      fileURL,
+					"filename": fileName,
+				},
+			})
+		})
+
+		// 删除户型图
+		api.DELETE("/house-types/:id/floor-plan", func(c *gin.Context) {
+			houseTypeID := c.Param("id")
+
+			// 检查户型是否存在
+			var houseType rental.SysHouseType
+			result := database.DB.Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
+			if result.Error != nil {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "户型不存在",
+				})
+				return
+			}
+
+			// 删除文件（如果存在）
+			if houseType.FloorPlanUrl != "" {
+				// 构建文件路径
+				filePath := strings.TrimPrefix(houseType.FloorPlanUrl, "/")
+				if _, err := os.Stat(filePath); err == nil {
+					os.Remove(filePath)
+				}
+			}
+
+			// 清空数据库中的户型图URL
+			updateResult := database.DB.Model(&houseType).Update("floor_plan_url", "")
+			if updateResult.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "更新数据库失败",
+					"error":   updateResult.Error.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "户型图删除成功",
 			})
 		})
 
