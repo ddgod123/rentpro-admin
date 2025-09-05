@@ -1,34 +1,40 @@
 package rental
 
-// District 区域结构
-type District struct {
-	ID            uint           `json:"id" gorm:"primaryKey;autoIncrement" comment:"主键ID"`
-	Code          string         `json:"code" gorm:"size:20;not null;uniqueIndex" comment:"区域编码"`
-	Name          string         `json:"name" gorm:"size:50;not null" comment:"区域名称"`
-	CityCode      string         `json:"city_code" gorm:"size:20;not null;index" comment:"城市编码"`
-	Sort          int            `json:"sort" gorm:"default:0" comment:"排序"`
-	Status        string         `json:"status" gorm:"size:20;default:'active'" comment:"状态"`
-	BusinessAreas []BusinessArea `json:"business_areas,omitempty" gorm:"foreignKey:DistrictID" comment:"商圈列表"`
+import (
+	"time"
+)
+
+// SysCity 城市数据模型
+type SysCity struct {
+	ID        uint64    `json:"id" gorm:"primaryKey;autoIncrement;comment:主键ID"`
+	Code      string    `json:"code" gorm:"type:varchar(10);uniqueIndex;not null;comment:城市代码"`
+	Name      string    `json:"name" gorm:"type:varchar(50);not null;comment:城市名称"`
+	Sort      int64     `json:"sort" gorm:"default:0;comment:排序"`
+	Status    string    `json:"status" gorm:"type:varchar(20);default:active;comment:状态"`
+	CreatedAt time.Time `json:"created_at" gorm:"comment:创建时间"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"comment:更新时间"`
+
+	// 关联关系
+	Districts []SysDistrict `json:"districts,omitempty" gorm:"foreignKey:CityID;references:ID"`
 }
 
-// BusinessArea 商圈结构
-type BusinessArea struct {
-	ID         uint     `json:"id" gorm:"primaryKey;autoIncrement" comment:"主键ID"`
-	Code       string   `json:"code" gorm:"size:20;not null;uniqueIndex" comment:"商圈编码"`
-	Name       string   `json:"name" gorm:"size:100;not null" comment:"商圈名称"`
-	DistrictID uint     `json:"district_id" gorm:"not null;index" comment:"所属区域ID"`
-	District   District `json:"district,omitempty" gorm:"foreignKey:DistrictID" comment:"所属区域"`
-	CityCode   string   `json:"city_code" gorm:"size:20;not null;index" comment:"城市编码"`
-	Sort       int      `json:"sort" gorm:"default:0" comment:"排序"`
-	Status     string   `json:"status" gorm:"size:20;default:'active'" comment:"状态"`
+// TableName 指定表名
+func (SysCity) TableName() string {
+	return "sys_cities"
 }
 
-// TableName 设置区域表名
-func (District) TableName() string {
-	return "sys_districts"
+// CityOption 城市选项结构（用于前端下拉选择）
+type CityOption struct {
+	ID   uint64 `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
 }
 
-// TableName 设置商圈表名
-func (BusinessArea) TableName() string {
-	return "sys_business_areas"
+// ToCityOption 转换为城市选项
+func (c *SysCity) ToCityOption() CityOption {
+	return CityOption{
+		ID:   c.ID,
+		Code: c.Code,
+		Name: c.Name,
+	}
 }

@@ -20,6 +20,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		page := c.DefaultQuery("page", "1")
 		pageSize := c.DefaultQuery("pageSize", "10")
 		name := c.Query("name")
+		city := c.Query("city")
 		district := c.Query("district")
 		businessArea := c.Query("business_area")
 		status := c.Query("status")
@@ -36,6 +37,10 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		if name != "" {
 			query += " AND name LIKE ?"
 			args = append(args, "%"+name+"%")
+		}
+		if city != "" {
+			query += " AND city = ?"
+			args = append(args, city)
 		}
 		if district != "" {
 			query += " AND district = ?"
@@ -72,6 +77,10 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		if name != "" {
 			countQuery += " AND name LIKE ?"
 			countArgs = append(countArgs, "%"+name+"%")
+		}
+		if city != "" {
+			countQuery += " AND city = ?"
+			countArgs = append(countArgs, city)
 		}
 		if district != "" {
 			countQuery += " AND district = ?"
@@ -440,10 +449,43 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		})
 	})
 
-	// 获取区域列表
+	// 获取城市列表
+	api.GET("/cities", func(c *gin.Context) {
+		var cities []map[string]interface{}
+		result := database.DB.Raw("SELECT id, code, name, sort, status FROM sys_cities WHERE status = 'active' ORDER BY sort ASC").Scan(&cities)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取城市列表失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "获取城市列表成功",
+			"data":    cities,
+		})
+	})
+
+	// 获取区域列表（支持按城市筛选）
 	api.GET("/districts", func(c *gin.Context) {
+		cityId := c.Query("cityId")
+
+		query := "SELECT id, code, name, city_code, city_id, sort, status FROM sys_districts WHERE status = 'active'"
+		args := []interface{}{}
+
+		if cityId != "" {
+			query += " AND city_id = ?"
+			args = append(args, cityId)
+		}
+
+		query += " ORDER BY sort ASC"
+
 		var districts []map[string]interface{}
-		result := database.DB.Raw("SELECT id, code, name, city_code, sort, status FROM sys_districts WHERE status = 'active' ORDER BY sort ASC").Scan(&districts)
+		result := database.DB.Raw(query, args...).Scan(&districts)
 
 		if result.Error != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

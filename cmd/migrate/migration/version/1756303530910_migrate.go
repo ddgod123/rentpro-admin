@@ -29,8 +29,9 @@ func migrate_1756303530910(db *gorm.DB, version string) error {
 	rentalModels := []interface{}{
 		&rental.SysBuildings{},
 		&rental.SysHouseType{},
-		&rental.District{},
-		&rental.BusinessArea{},
+		&rental.SysCity{},
+		&rental.SysDistrict{},
+		&rental.SysBusinessArea{},
 	}
 
 	// 基础表迁移

@@ -42,14 +42,39 @@ func (im *ImageManager) UploadImage(file *multipart.FileHeader, req *image.Image
 	fileName := fmt.Sprintf("%s_%d_%s", req.Category, time.Now().UnixNano(), file.Filename)
 	var customKey string
 
-	// 如果是楼盘相关的图片，使用楼盘文件夹结构
+	// 如果是楼盘相关的图片，使用楼盘管理文件夹结构
 	if req.Module == "building" || req.Module == "house" {
 		if req.ModuleID > 0 {
-			// 格式: buildings/{buildingId}/{category}/{timestamp}_{filename}
-			customKey = fmt.Sprintf("buildings/%d/%s/%s", req.ModuleID, req.Category, fileName)
+			// 获取楼盘信息以构建正确的路径
+			var building struct {
+				ID   uint64 `json:"id"`
+				Name string `json:"name"`
+				City string `json:"city"`
+			}
+
+			// 从数据库获取楼盘信息
+			if err := im.db.Table("sys_buildings").
+				Select("id, name, city").
+				Where("id = ?", req.ModuleID).
+				First(&building).Error; err == nil {
+
+				// 使用楼盘表中的城市名称
+				cityName := building.City
+
+				// 构建新的楼盘管理文件夹路径
+				safeCityName := im.sanitizeFolderName(cityName)
+				safeBuildingName := im.sanitizeFolderName(building.Name)
+				buildingFolderName := fmt.Sprintf("%d-%s", building.ID, safeBuildingName)
+
+				// 格式: 楼盘管理/{城市名}/{楼盘ID-楼盘名称}/{category}/{timestamp}_{filename}
+				customKey = fmt.Sprintf("楼盘管理/%s/%s/%s/%s", safeCityName, buildingFolderName, req.Category, fileName)
+			} else {
+				// 如果获取楼盘信息失败，使用备用路径
+				customKey = fmt.Sprintf("楼盘管理/未分类楼盘/%s/%s", req.Category, fileName)
+			}
 		} else {
 			// 如果没有指定楼盘ID，使用通用楼盘文件夹
-			customKey = fmt.Sprintf("buildings/common/%s/%s", req.Category, fileName)
+			customKey = fmt.Sprintf("楼盘管理/通用文件夹/%s/%s", req.Category, fileName)
 		}
 	} else {
 		// 其他模块使用原有逻辑
@@ -425,15 +450,34 @@ func (im *ImageManager) GetBuildingFloorPlans(buildingID uint64) ([]*image.SysIm
 }
 
 // CreateBuildingFolder 创建楼盘文件夹结构并在七牛云上创建相关目录
+// 新的文件夹结构：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/{子文件夹}/
 func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName string) error {
-	// 验证楼盘是否存在
-	var count int64
-	if err := im.db.Table("sys_buildings").Where("id = ?", buildingID).Count(&count).Error; err != nil {
-		return fmt.Errorf("验证楼盘存在性失败: %v", err)
+	// 从数据库获取楼盘所在城市信息
+	var building struct {
+		ID   uint64 `json:"id"`
+		Name string `json:"name"`
+		City string `json:"city"`
 	}
 
-	if count == 0 {
-		return fmt.Errorf("楼盘不存在: %d", buildingID)
+	if err := im.db.Table("sys_buildings").
+		Select("id, name, city").
+		Where("id = ?", buildingID).
+		First(&building).Error; err != nil {
+		return fmt.Errorf("获取楼盘信息失败: %v", err)
+	}
+
+	// 使用楼盘表中的城市字段作为城市名称
+	cityName := building.City
+
+	// 验证城市是否在城市表中存在（可选）
+	var cityExists bool
+	im.db.Table("sys_cities").
+		Select("COUNT(*) > 0").
+		Where("name = ? AND status = 'active'", cityName).
+		Scan(&cityExists)
+
+	if !cityExists {
+		fmt.Printf("⚠️  警告: 城市 '%s' 不在城市表中，但仍会创建文件夹\n", cityName)
 	}
 
 	// 定义楼盘文件夹结构
@@ -447,8 +491,8 @@ func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName str
 		"documents":       "相关文档",
 	}
 
-	// 在七牛云上创建文件夹标记文件
-	if err := im.createQiniuFolderStructure(buildingID, buildingName, folderStructure); err != nil {
+	// 在七牛云上创建文件夹标记文件（使用新的楼盘管理结构）
+	if err := im.createBuildingManagementFolderStructure(buildingID, buildingName, cityName, folderStructure); err != nil {
 		fmt.Printf("⚠️  七牛云文件夹创建失败: %v\n", err)
 		// 不阻止楼盘创建，只记录错误
 	}
@@ -458,12 +502,13 @@ func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName str
 		fmt.Printf("⚠️  数据库文件夹信息记录失败: %v\n", err)
 	}
 
-	// 处理楼盘名称用于显示
+	// 处理楼盘名称和城市名称用于显示
 	safeBuildingName := im.sanitizeFolderName(buildingName)
+	safeCityName := im.sanitizeFolderName(cityName)
 	buildingFolderName := fmt.Sprintf("%d-%s", buildingID, safeBuildingName)
 
-	fmt.Printf("✅ 楼盘文件夹结构创建完成: 楼盘ID=%d, 名称=%s\n", buildingID, buildingName)
-	fmt.Printf("📁 文件夹结构: buildings/%s/\n", buildingFolderName)
+	fmt.Printf("✅ 楼盘文件夹结构创建完成: 楼盘ID=%d, 名称=%s, 城市=%s\n", buildingID, buildingName, cityName)
+	fmt.Printf("📁 文件夹结构: 楼盘管理/%s/%s/\n", safeCityName, buildingFolderName)
 	for folder, desc := range folderStructure {
 		fmt.Printf("   ├── %s/     (%s)\n", folder, desc)
 	}
@@ -471,31 +516,104 @@ func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName str
 	return nil
 }
 
-// createQiniuFolderStructure 在七牛云上创建文件夹结构
-func (im *ImageManager) createQiniuFolderStructure(buildingID uint64, buildingName string, folders map[string]string) error {
+// InitializeCityFolders 初始化所有城市的基础文件夹结构
+// 创建楼盘管理主文件夹，并根据数据库城市表创建所有城市文件夹
+func (im *ImageManager) InitializeCityFolders() error {
 	if im.qiniuService == nil {
 		return fmt.Errorf("七牛云服务未初始化")
 	}
 
-	// 处理楼盘名称，确保适合作为文件夹名称
+	// 1. 创建楼盘管理主文件夹
+	mainFolderKey := "楼盘管理/.folder"
+	mainFolderContent := fmt.Sprintf(`{
+  "folder_name": "楼盘管理",
+  "folder_type": "main_building_management",
+  "description": "楼盘管理系统主文件夹",
+  "created_at": "%s",
+  "structure_version": "v2.0",
+  "purpose": "楼盘管理系统的根目录文件夹"
+}`, time.Now().Format("2006-01-02 15:04:05"))
+
+	if err := im.qiniuService.UploadText(mainFolderKey, mainFolderContent); err != nil {
+		fmt.Printf("⚠️  创建楼盘管理主文件夹失败: %v\n", err)
+	} else {
+		fmt.Printf("📁 创建楼盘管理主文件夹: 楼盘管理/\n")
+	}
+
+	// 2. 从数据库获取所有激活的城市
+	var cities []struct {
+		ID   uint64 `json:"id"`
+		Name string `json:"name"`
+		Code string `json:"code"`
+	}
+
+	if err := im.db.Table("sys_cities").
+		Select("id, name, code").
+		Where("status = 'active'").
+		Order("sort ASC").
+		Find(&cities).Error; err != nil {
+		return fmt.Errorf("获取城市列表失败: %v", err)
+	}
+
+	// 3. 为每个城市创建文件夹
+	fmt.Printf("🏙️  开始创建 %d 个城市文件夹...\n", len(cities))
+	for _, city := range cities {
+		safeCityName := im.sanitizeFolderName(city.Name)
+		cityFolderKey := fmt.Sprintf("楼盘管理/%s/.folder", safeCityName)
+
+		cityFolderContent := fmt.Sprintf(`{
+  "city_id": %d,
+  "city_name": "%s",
+  "city_code": "%s",
+  "folder_type": "city_folder",
+  "folder_path": "楼盘管理/%s/",
+  "created_at": "%s",
+  "structure_version": "v2.0",
+  "purpose": "存储%s市的所有楼盘信息"
+}`, city.ID, city.Name, city.Code, safeCityName, time.Now().Format("2006-01-02 15:04:05"), city.Name)
+
+		if err := im.qiniuService.UploadText(cityFolderKey, cityFolderContent); err != nil {
+			fmt.Printf("⚠️  创建城市文件夹失败 %s: %v\n", city.Name, err)
+			continue
+		}
+
+		fmt.Printf("🏙️  创建城市文件夹: 楼盘管理/%s/ (ID: %d)\n", safeCityName, city.ID)
+	}
+
+	fmt.Printf("✅ 城市文件夹初始化完成！共创建了 %d 个城市文件夹\n", len(cities))
+	return nil
+}
+
+// createBuildingManagementFolderStructure 在七牛云上创建楼盘管理文件夹结构
+// 新结构：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/{子文件夹}/
+func (im *ImageManager) createBuildingManagementFolderStructure(buildingID uint64, buildingName, cityName string, folders map[string]string) error {
+	if im.qiniuService == nil {
+		return fmt.Errorf("七牛云服务未初始化")
+	}
+
+	// 处理城市名称和楼盘名称，确保适合作为文件夹名称
+	safeCityName := im.sanitizeFolderName(cityName)
 	safeBuildingName := im.sanitizeFolderName(buildingName)
 	buildingFolderName := fmt.Sprintf("%d-%s", buildingID, safeBuildingName)
 
 	// 为每个文件夹创建一个标记文件（因为七牛云不支持空文件夹）
 	for folder, desc := range folders {
-		// 创建文件夹标记文件的key，使用新的命名格式
-		folderKey := fmt.Sprintf("buildings/%s/%s/.folder", buildingFolderName, folder)
+		// 创建文件夹标记文件的key，使用楼盘管理/城市/楼盘/子文件夹的层级结构
+		folderKey := fmt.Sprintf("楼盘管理/%s/%s/%s/.folder", safeCityName, buildingFolderName, folder)
 
 		// 创建标记文件内容
 		content := fmt.Sprintf(`{
   "building_id": %d,
   "building_name": "%s",
+  "city_name": "%s",
   "building_folder_name": "%s",
   "folder_type": "%s",
   "description": "%s",
+  "folder_path": "楼盘管理/%s/%s/%s/",
   "created_at": "%s",
-  "purpose": "This file marks the existence of this folder structure"
-}`, buildingID, buildingName, buildingFolderName, folder, desc, time.Now().Format("2006-01-02 15:04:05"))
+  "structure_version": "v2.0",
+  "purpose": "楼盘管理系统文件夹结构标记文件"
+}`, buildingID, buildingName, cityName, buildingFolderName, folder, desc, safeCityName, buildingFolderName, folder, time.Now().Format("2006-01-02 15:04:05"))
 
 		// 上传标记文件到七牛云
 		if err := im.qiniuService.UploadText(folderKey, content); err != nil {
@@ -503,10 +621,17 @@ func (im *ImageManager) createQiniuFolderStructure(buildingID uint64, buildingNa
 			continue
 		}
 
-		fmt.Printf("📁 创建七牛云文件夹: buildings/%s/%s/\n", buildingFolderName, folder)
+		fmt.Printf("📁 创建七牛云文件夹: 楼盘管理/%s/%s/%s/\n", safeCityName, buildingFolderName, folder)
 	}
 
 	return nil
+}
+
+// createQiniuFolderStructure 在七牛云上创建文件夹结构（旧版本，已弃用）
+// @Deprecated: 使用 createBuildingManagementFolderStructure 替代
+func (im *ImageManager) createQiniuFolderStructure(buildingID uint64, buildingName, cityName string, folders map[string]string) error {
+	fmt.Printf("⚠️  使用了已弃用的文件夹结构函数，自动转换为新的楼盘管理结构\n")
+	return im.createBuildingManagementFolderStructure(buildingID, buildingName, cityName, folders)
 }
 
 // sanitizeFolderName 清理楼盘名称，确保适合作为文件夹名称
