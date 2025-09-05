@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +22,7 @@ import (
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/global"
 	"rentPro/rentpro-admin/common/initialize"
+	"rentPro/rentpro-admin/common/models/image"
 	"rentPro/rentpro-admin/common/models/rental"
 	"rentPro/rentpro-admin/common/models/system"
 	"rentPro/rentpro-admin/common/utils"
@@ -127,6 +127,15 @@ func run() error {
 	if err != nil {
 		log.Printf("⚠️  七牛云服务初始化失败: %v", err)
 		log.Println("将使用本地文件存储")
+	} else {
+		// 初始化图片管理器
+		fmt.Println("初始化图片管理器...")
+		err = utils.InitImageManager()
+		if err != nil {
+			log.Printf("⚠️  图片管理器初始化失败: %v", err)
+		} else {
+			log.Println("✅ 图片管理器初始化成功")
+		}
 	}
 
 	// 设置Gin模式
@@ -715,12 +724,18 @@ func setupRoutes(router *gin.Engine) {
 		api.POST("/buildings", func(c *gin.Context) {
 			// 解析请求体
 			var buildingData struct {
-				Name         string `json:"name" binding:"required"`
-				District     string `json:"district" binding:"required"`
-				BusinessArea string `json:"businessArea"`
-				PropertyType string `json:"propertyType"`
-				Status       string `json:"status"`
-				Description  string `json:"description"`
+				Name            string `json:"name" binding:"required"`
+				Developer       string `json:"developer"`
+				DetailedAddress string `json:"detailedAddress" binding:"required"`
+				City            string `json:"city" binding:"required"`
+				District        string `json:"district" binding:"required"`
+				BusinessArea    string `json:"businessArea"`
+				SubDistrict     string `json:"subDistrict"`
+				PropertyType    string `json:"propertyType"`
+				PropertyCompany string `json:"propertyCompany"`
+				Description     string `json:"description"`
+				Status          string `json:"status"`
+				IsHot           bool   `json:"isHot"`
 			}
 
 			if err := c.ShouldBindJSON(&buildingData); err != nil {
@@ -734,13 +749,19 @@ func setupRoutes(router *gin.Engine) {
 
 			// 插入数据库
 			result := database.DB.Exec(
-				"INSERT INTO sys_buildings (name, district, business_area, property_type, status, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+				"INSERT INTO sys_buildings (name, developer, detailed_address, city, district, business_area, sub_district, property_type, property_company, description, status, is_hot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
 				buildingData.Name,
+				buildingData.Developer,
+				buildingData.DetailedAddress,
+				buildingData.City,
 				buildingData.District,
 				buildingData.BusinessArea,
+				buildingData.SubDistrict,
 				buildingData.PropertyType,
-				buildingData.Status,
+				buildingData.PropertyCompany,
 				buildingData.Description,
+				buildingData.Status,
+				buildingData.IsHot,
 			)
 
 			if result.Error != nil {
@@ -752,9 +773,37 @@ func setupRoutes(router *gin.Engine) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{
-				"code":    200,
-				"message": "创建成功",
+			// 获取新创建的楼盘ID
+			var newBuildingID int64
+			database.DB.Raw("SELECT LAST_INSERT_ID()").Scan(&newBuildingID)
+
+			// 初始化楼盘文件夹结构
+			imageManager := utils.GetImageManager()
+			if imageManager != nil {
+				if err := imageManager.CreateBuildingFolder(uint64(newBuildingID), buildingData.Name); err != nil {
+					// 文件夹创建失败不影响楼盘创建成功，只记录日志
+					fmt.Printf("⚠️ 楼盘文件夹初始化失败: %v\n", err)
+				}
+			}
+
+			c.JSON(http.StatusCreated, gin.H{
+				"code":    201,
+				"message": "楼盘创建成功",
+				"data": gin.H{
+					"id":              newBuildingID,
+					"name":            buildingData.Name,
+					"developer":       buildingData.Developer,
+					"detailedAddress": buildingData.DetailedAddress,
+					"city":            buildingData.City,
+					"district":        buildingData.District,
+					"businessArea":    buildingData.BusinessArea,
+					"subDistrict":     buildingData.SubDistrict,
+					"propertyType":    buildingData.PropertyType,
+					"propertyCompany": buildingData.PropertyCompany,
+					"description":     buildingData.Description,
+					"status":          buildingData.Status,
+					"isHot":           buildingData.IsHot,
+				},
 			})
 		})
 
@@ -1141,9 +1190,19 @@ func setupRoutes(router *gin.Engine) {
 
 		// 上传户型图
 		api.POST("/upload/floor-plan", func(c *gin.Context) {
+			// 获取用户ID
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
 			// 获取户型ID
-			houseTypeID := c.PostForm("house_type_id")
-			if houseTypeID == "" {
+			houseTypeIDStr := c.PostForm("house_type_id")
+			if houseTypeIDStr == "" {
 				c.JSON(http.StatusBadRequest, gin.H{
 					"code":    400,
 					"message": "缺少户型ID参数",
@@ -1151,7 +1210,16 @@ func setupRoutes(router *gin.Engine) {
 				return
 			}
 
-			// 检查户型是否存在
+			houseTypeID, err := strconv.ParseUint(houseTypeIDStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "户型ID格式错误",
+				})
+				return
+			}
+
+			// 检查户型是否存在，并获取楼盘ID
 			var houseType rental.SysHouseType
 			result := database.DB.Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
 			if result.Error != nil {
@@ -1173,131 +1241,32 @@ func setupRoutes(router *gin.Engine) {
 				return
 			}
 
-			// 获取七牛云服务
-			qiniuService := utils.GetQiniuService()
-			if qiniuService == nil {
-				// 如果七牛云服务不可用，回退到本地存储
-				log.Println("七牛云服务不可用，使用本地存储")
-
-				// 检查文件类型
-				if !strings.HasPrefix(file.Header.Get("Content-Type"), "image/") {
-					c.JSON(http.StatusBadRequest, gin.H{
-						"code":    400,
-						"message": "只支持图片文件",
-					})
-					return
-				}
-
-				// 检查文件大小（5MB）
-				if file.Size > 5*1024*1024 {
-					c.JSON(http.StatusBadRequest, gin.H{
-						"code":    400,
-						"message": "文件大小不能超过5MB",
-					})
-					return
-				}
-
-				// 生成文件名
-				ext := filepath.Ext(file.Filename)
-				if ext == "" {
-					ext = ".jpg"
-				}
-				fileName := fmt.Sprintf("floor_plan_%s_%d%s", houseTypeID, time.Now().Unix(), ext)
-
-				// 确保上传目录存在
-				uploadDir := "uploads/floor-plans"
-				if err := os.MkdirAll(uploadDir, 0755); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "创建上传目录失败",
-						"error":   err.Error(),
-					})
-					return
-				}
-
-				// 保存文件
-				filePath := filepath.Join(uploadDir, fileName)
-				if err := c.SaveUploadedFile(file, filePath); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "保存文件失败",
-						"error":   err.Error(),
-					})
-					return
-				}
-
-				// 生成访问URL
-				fileURL := fmt.Sprintf("/uploads/floor-plans/%s", fileName)
-
-				// 更新数据库中的户型图URL
-				updateResult := database.DB.Model(&houseType).Update("floor_plan_url", fileURL)
-				if updateResult.Error != nil {
-					// 删除已上传的文件
-					os.Remove(filePath)
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "更新数据库失败",
-						"error":   updateResult.Error.Error(),
-					})
-					return
-				}
-
-				c.JSON(http.StatusOK, gin.H{
-					"code":    200,
-					"message": "户型图上传成功",
-					"data": gin.H{
-						"url":      fileURL,
-						"filename": fileName,
-					},
+			// 使用图片管理器上传楼盘户型图
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
 				})
 				return
 			}
 
-			// 使用七牛云服务上传
-			// 验证文件
-			err = qiniuService.ValidateFile(file)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"code":    400,
-					"message": err.Error(),
-				})
-				return
-			}
-
-			// 生成自定义文件名
-			customKey := fmt.Sprintf("floor_plan_%s_%d.jpg", houseTypeID, time.Now().Unix())
-
-			// 上传到七牛云
-			uploadResult, err := qiniuService.UploadFile(file, customKey)
+			// 上传楼盘户型图
+			img, err := imageManager.UploadBuildingFloorPlan(file, uint64(houseType.BuildingID), houseTypeID, userID.(uint64))
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
-					"message": "上传到七牛云失败",
+					"message": "上传户型图失败",
 					"error":   err.Error(),
 				})
 				return
 			}
 
-			// 如果有旧的户型图，删除它
-			if houseType.FloorPlanUrl != "" {
-				oldKey := qiniuService.ExtractKeyFromURL(houseType.FloorPlanUrl)
-				if oldKey != "" {
-					err := qiniuService.DeleteFile(oldKey)
-					if err != nil {
-						log.Printf("删除旧户型图失败: %v", err)
-					}
-				}
-			}
-
-			// 更新数据库
-			updateData := map[string]interface{}{
-				"floor_plan_url": uploadResult.OriginalURL,
-			}
-
-			updateResult := database.DB.Model(&houseType).Updates(updateData)
+			// 更新户型的floor_plan_url
+			updateResult := database.DB.Model(&houseType).Update("floor_plan_url", img.URL)
 			if updateResult.Error != nil {
-				// 如果数据库更新失败，尝试删除已上传的文件
-				qiniuService.DeleteFile(uploadResult.Key)
+				// 如果数据库更新失败，删除已上传的文件
+				imageManager.DeleteImage(img.ID, userID.(uint64))
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "更新数据库失败",
@@ -1310,16 +1279,17 @@ func setupRoutes(router *gin.Engine) {
 				"code":    200,
 				"message": "户型图上传成功",
 				"data": gin.H{
-					"key":           uploadResult.Key,
-					"hash":          uploadResult.Hash,
-					"size":          uploadResult.Size,
-					"original_url":  uploadResult.OriginalURL,
-					"thumbnail_url": uploadResult.ThumbnailURL,
-					"medium_url":    uploadResult.MediumURL,
-					"large_url":     uploadResult.LargeURL,
-					"styles":        uploadResult.Styles,
+					"image_id":      img.ID,
+					"original_url":  img.URL,
+					"thumbnail_url": img.ThumbnailURL,
+					"medium_url":    img.MediumURL,
+					"large_url":     img.LargeURL,
+					"file_size":     img.FileSize,
+					"building_id":   houseType.BuildingID,
+					"house_type_id": houseTypeID,
 				},
 			})
+			return
 		})
 
 		// 删除户型图
@@ -1452,6 +1422,499 @@ func setupRoutes(router *gin.Engine) {
 					"allowed_types": qiniuConfig.Upload.AllowedTypes,
 					"upload_dir":    qiniuConfig.Upload.UploadDir,
 				},
+			})
+		})
+	}
+
+	// ===========================
+	// 图片管理 API
+	// ===========================
+	{
+		// 上传图片
+		api.POST("/images/upload", func(c *gin.Context) {
+			// 获取用户ID
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
+			// 获取上传的文件
+			file, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "获取上传文件失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 解析请求参数
+			var req image.ImageUploadRequest
+			if err := c.ShouldBind(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			// 获取图片管理器
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			// 上传图片
+			img, err := imageManager.UploadImage(file, &req, userID.(uint64))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "上传图片失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "图片上传成功",
+				"data":    img,
+			})
+		})
+
+		// 获取图片列表
+		api.GET("/images", func(c *gin.Context) {
+			var req image.ImageListRequest
+			if err := c.ShouldBindQuery(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			result, err := imageManager.ListImages(&req)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取图片列表失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取图片列表成功",
+				"data":    result,
+			})
+		})
+
+		// 获取图片详情
+		api.GET("/images/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			imageID, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "图片ID格式错误",
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			img, err := imageManager.GetImage(imageID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取图片详情成功",
+				"data":    img,
+			})
+		})
+
+		// 更新图片信息
+		api.PUT("/images/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			imageID, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "图片ID格式错误",
+				})
+				return
+			}
+
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
+			var req image.ImageUpdateRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			if err := imageManager.UpdateImage(imageID, &req, userID.(uint64)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "更新图片信息失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "更新图片信息成功",
+			})
+		})
+
+		// 删除图片
+		api.DELETE("/images/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			imageID, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "图片ID格式错误",
+				})
+				return
+			}
+
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			if err := imageManager.DeleteImage(imageID, userID.(uint64)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "删除图片失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "删除图片成功",
+			})
+		})
+
+		// 批量删除图片
+		api.DELETE("/images/batch", func(c *gin.Context) {
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
+			var req image.ImageBatchDeleteRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			if err := imageManager.BatchDeleteImages(req.IDs, userID.(uint64)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "批量删除图片失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "批量删除图片成功",
+			})
+		})
+
+		// 获取模块图片
+		api.GET("/images/module/:module/:moduleId", func(c *gin.Context) {
+			module := c.Param("module")
+			moduleIDStr := c.Param("moduleId")
+			category := c.Query("category")
+
+			moduleID, err := strconv.ParseUint(moduleIDStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "模块ID格式错误",
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			images, err := imageManager.GetImagesByModule(module, moduleID, category)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取模块图片失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取模块图片成功",
+				"data":    images,
+			})
+		})
+
+		// 设置主图
+		api.PUT("/images/:id/set-main", func(c *gin.Context) {
+			id := c.Param("id")
+			imageID, err := strconv.ParseUint(id, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "图片ID格式错误",
+				})
+				return
+			}
+
+			userID, exists := c.Get("user_id")
+			if !exists {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权访问",
+				})
+				return
+			}
+
+			var req struct {
+				Module   string `json:"module" binding:"required"`
+				ModuleID uint64 `json:"moduleId" binding:"required"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "请求参数错误",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			if err := imageManager.SetMainImage(req.Module, req.ModuleID, imageID, userID.(uint64)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "设置主图失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "设置主图成功",
+			})
+		})
+
+		// 获取楼盘图片列表
+		api.GET("/buildings/images/:buildingId", func(c *gin.Context) {
+			buildingIDStr := c.Param("buildingId")
+			category := c.Query("category")
+
+			buildingID, err := strconv.ParseUint(buildingIDStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "楼盘ID格式错误",
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			images, err := imageManager.GetBuildingImages(buildingID, category)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取楼盘图片失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取楼盘图片成功",
+				"data":    images,
+			})
+		})
+
+		// 获取楼盘户型图列表
+		api.GET("/buildings/floor-plans/:buildingId", func(c *gin.Context) {
+			buildingIDStr := c.Param("buildingId")
+
+			buildingID, err := strconv.ParseUint(buildingIDStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "楼盘ID格式错误",
+				})
+				return
+			}
+
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			images, err := imageManager.GetBuildingFloorPlans(buildingID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取楼盘户型图失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取楼盘户型图成功",
+				"data":    images,
+			})
+		})
+
+		// 获取图片统计信息
+		api.GET("/images/stats", func(c *gin.Context) {
+			imageManager := utils.GetImageManager()
+			if imageManager == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "图片管理器未初始化",
+				})
+				return
+			}
+
+			stats, err := imageManager.GetImageStats()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取图片统计信息失败",
+					"error":   err.Error(),
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "获取图片统计信息成功",
+				"data":    stats,
 			})
 		})
 	}

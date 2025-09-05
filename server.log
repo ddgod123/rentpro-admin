@@ -1,0 +1,76 @@
+hello world
+main -----> Execute()
+接收到的命令行参数---------------- [/Users/mac/Library/Caches/go-build/61/61dc113cc1fa7b777837478438515eb609e96405e670dc06d0cec981f2811986-d/main api -c config/settings.yml -p 8002]
+=== rentpro-admin API服务器 v1.0.0 ===
+初始化数据库连接...
+2025/09/05 13:53:10 开始初始化数据库连接...
+2025/09/05 13:53:10 正在连接数据库: mysql
+2025/09/05 13:53:10 连接字符串: root***00ms
+2025/09/05 13:53:10 ✅ 数据库连接测试成功
+2025/09/05 13:53:10 ✅ 数据库连接初始化成功！驱动: mysql
+初始化七牛云服务...
+2025/09/05 13:53:10 开始初始化七牛云服务...
+2025/09/05 13:53:10 ✅ 七牛云服务初始化成功！
+2025/09/05 13:53:10 存储空间: rentpro-floor-plans
+2025/09/05 13:53:10 访问域名: t22v3tniy.hb-bkt.clouddn.com
+2025/09/05 13:53:10 存储区域: huabei
+2025/09/05 13:53:10 使用HTTPS: true
+2025/09/05 13:53:10 使用CDN: true
+2025/09/05 13:53:10 最大文件大小: 5242880 bytes
+2025/09/05 13:53:10 支持的文件类型: [image/jpeg image/jpg image/png image/gif image/webp]
+初始化图片管理器...
+2025/09/05 13:53:10 ✅ 图片管理器初始化成功
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /uploads/*filepath        --> github.com/gin-gonic/gin.(*RouterGroup).createStaticHandler.func1 (6 handlers)
+[GIN-debug] HEAD   /uploads/*filepath        --> github.com/gin-gonic/gin.(*RouterGroup).createStaticHandler.func1 (6 handlers)
+[GIN-debug] GET    /health                   --> rentPro/rentpro-admin/cmd/api.setupRoutes.func1 (6 handlers)
+[GIN-debug] GET    /api/v1/users             --> rentPro/rentpro-admin/cmd/api.setupRoutes.func2 (6 handlers)
+[GIN-debug] POST   /api/v1/auth/login        --> rentPro/rentpro-admin/cmd/api.setupRoutes.func3 (6 handlers)
+[GIN-debug] POST   /api/v1/auth/logout       --> rentPro/rentpro-admin/cmd/api.setupRoutes.func4 (6 handlers)
+[GIN-debug] GET    /api/v1/auth/userinfo     --> rentPro/rentpro-admin/cmd/api.setupRoutes.func5 (6 handlers)
+[GIN-debug] GET    /api/v1/auth/check        --> rentPro/rentpro-admin/cmd/api.setupRoutes.func6 (6 handlers)
+[GIN-debug] GET    /api/v1/system/info       --> rentPro/rentpro-admin/cmd/api.setupRoutes.func7 (6 handlers)
+[GIN-debug] GET    /api/v1/buildings         --> rentPro/rentpro-admin/cmd/api.setupRoutes.func8 (6 handlers)
+[GIN-debug] GET    /api/v1/buildings/:id     --> rentPro/rentpro-admin/cmd/api.setupRoutes.func9 (6 handlers)
+[GIN-debug] POST   /api/v1/buildings         --> rentPro/rentpro-admin/cmd/api.setupRoutes.func10 (6 handlers)
+[GIN-debug] PUT    /api/v1/buildings/:id     --> rentPro/rentpro-admin/cmd/api.setupRoutes.func11 (6 handlers)
+[GIN-debug] DELETE /api/v1/buildings/:id     --> rentPro/rentpro-admin/cmd/api.setupRoutes.func12 (6 handlers)
+[GIN-debug] GET    /api/v1/house-types/building/:buildingId --> rentPro/rentpro-admin/cmd/api.setupRoutes.func13 (6 handlers)
+[GIN-debug] GET    /api/v1/buildings/:id/info --> rentPro/rentpro-admin/cmd/api.setupRoutes.func14 (6 handlers)
+[GIN-debug] DELETE /api/v1/house-types/:id   --> rentPro/rentpro-admin/cmd/api.setupRoutes.func15 (6 handlers)
+[GIN-debug] POST   /api/v1/house-types       --> rentPro/rentpro-admin/cmd/api.setupRoutes.func16 (6 handlers)
+[GIN-debug] POST   /api/v1/upload/floor-plan --> rentPro/rentpro-admin/cmd/api.setupRoutes.func17 (6 handlers)
+[GIN-debug] POST   /api/v1/upload/floor-plan --> rentPro/rentpro-admin/cmd/api.setupRoutes.func18 (6 handlers)
+panic: handlers are already registered for path '/api/v1/upload/floor-plan'
+
+goroutine 1 [running]:
+github.com/gin-gonic/gin.(*node).addRoute(0x99530d6?, {0xc0004e0540, 0x19}, {0xc000404c90, 0x6, 0x6})
+	/Users/mac/go/pkg/mod/github.com/gin-gonic/gin@v1.10.1/tree.go:260 +0x6e8
+github.com/gin-gonic/gin.(*Engine).addRoute(0xc0004e41a0, {0x99530d6, 0x4}, {0xc0004e0540, 0x19}, {0xc000404c90, 0x6, 0x6})
+	/Users/mac/go/pkg/mod/github.com/gin-gonic/gin@v1.10.1/gin.go:352 +0x252
+github.com/gin-gonic/gin.(*RouterGroup).handle(0xc00044f400, {0x99530d6, 0x4}, {0x996629f?, 0x0?}, {0xc00043e3f0, 0x1, 0x0?})
+	/Users/mac/go/pkg/mod/github.com/gin-gonic/gin@v1.10.1/routergroup.go:89 +0x13e
+github.com/gin-gonic/gin.(*RouterGroup).POST(...)
+	/Users/mac/go/pkg/mod/github.com/gin-gonic/gin@v1.10.1/routergroup.go:112
+rentPro/rentpro-admin/cmd/api.setupRoutes(0xc0004e41a0)
+	/Users/mac/go/src/rentPro/houduan/rentpro-admin-main/cmd/api/server.go:1279 +0x535
+rentPro/rentpro-admin/cmd/api.run()
+	/Users/mac/go/src/rentPro/houduan/rentpro-admin-main/cmd/api/server.go:154 +0x4bc
+rentPro/rentpro-admin/cmd/api.init.func2(0xc00047ec00?, {0x9953112?, 0x4?, 0x9953092?})
+	/Users/mac/go/src/rentPro/houduan/rentpro-admin-main/cmd/api/server.go:93 +0x1e
+github.com/spf13/cobra.(*Command).execute(0xa000360, {0xc000044180, 0x4, 0x4})
+	/Users/mac/go/pkg/mod/github.com/spf13/cobra@v1.9.1/command.go:1015 +0xb02
+github.com/spf13/cobra.(*Command).ExecuteC(0xa0000a0)
+	/Users/mac/go/pkg/mod/github.com/spf13/cobra@v1.9.1/command.go:1148 +0x465
+github.com/spf13/cobra.(*Command).Execute(...)
+	/Users/mac/go/pkg/mod/github.com/spf13/cobra@v1.9.1/command.go:1071
+rentPro/rentpro-admin/cmd.Execute()
+	/Users/mac/go/src/rentPro/houduan/rentpro-admin-main/cmd/cobra.go:114 +0xb4
+main.main()
+	/Users/mac/go/src/rentPro/houduan/rentpro-admin-main/main.go:11 +0x4b
+exit status 2
