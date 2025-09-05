@@ -380,9 +380,21 @@ func (im *ImageManager) UploadBuildingFloorPlan(file *multipart.FileHeader, buil
 		return nil, err
 	}
 
-	// 生成存储Key，使用楼盘文件夹结构
+	// 获取楼盘信息（城市和名称）
+	var building struct {
+		ID   uint64 `json:"id"`
+		Name string `json:"name"`
+		City string `json:"city"`
+	}
+	result := im.db.Table("sys_buildings").Where("id = ? AND deleted_at IS NULL", buildingID).First(&building)
+	if result.Error != nil {
+		return nil, fmt.Errorf("获取楼盘信息失败: %v", result.Error)
+	}
+
+	// 生成存储Key，使用新的文件夹结构：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/户型图/{文件名}
 	fileName := fmt.Sprintf("floor_plan_%d_%s", time.Now().UnixNano(), file.Filename)
-	customKey := fmt.Sprintf("buildings/%d/floor-plans/%s", buildingID, fileName)
+	sanitizedBuildingName := im.sanitizeFolderName(building.Name)
+	customKey := fmt.Sprintf("楼盘管理/%s/%d-%s/户型图/%s", building.City, building.ID, sanitizedBuildingName, fileName)
 
 	// 上传到七牛云
 	uploadResult, err := im.qiniuService.UploadFile(file, customKey)

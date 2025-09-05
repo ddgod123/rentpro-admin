@@ -13,7 +13,8 @@ func main() {
 
 /*
 
-
+同步仓库：
+./sync_repositories.sh --dry-run
 
 启动API服务器：go run main.go api -p 8002
 • 执行数据库迁移：go run main.go migrate

@@ -24,38 +24,58 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		district := c.Query("district")
 		businessArea := c.Query("business_area")
 		status := c.Query("status")
+		deleted := c.Query("deleted") // 是否查询软删除的数据
 
 		// 转换分页参数
 		pageNum, _ := strconv.Atoi(page)
 		pageSizeNum, _ := strconv.Atoi(pageSize)
 		offset := (pageNum - 1) * pageSizeNum
 
-		// 构建查询条件
-		query := "SELECT id, name, district, business_area, property_type, status, rent_count, created_at FROM sys_buildings WHERE deleted_at IS NULL"
+		// 构建查询条件 - 根据deleted参数决定查询条件，并关联用户表获取用户姓名
+		var query string
+		if deleted == "true" {
+			// 查询软删除的数据，包含deleted_at字段
+			query = `SELECT b.id, b.name, b.city, b.district, b.business_area, b.property_type, b.status, b.rent_count, 
+					b.created_at, b.updated_at, b.created_by, b.updated_by, b.deleted_at,
+					COALESCE(u_updated.nick_name, u_created.nick_name, b.updated_by, b.created_by) as editor_name
+					FROM sys_buildings b
+					LEFT JOIN sys_user u_created ON b.created_by = u_created.username
+					LEFT JOIN sys_user u_updated ON b.updated_by = u_updated.username
+					WHERE b.deleted_at IS NOT NULL`
+		} else {
+			// 查询正常数据
+			query = `SELECT b.id, b.name, b.district, b.business_area, b.property_type, b.status, b.rent_count, 
+					b.created_at, b.updated_at, b.created_by, b.updated_by,
+					COALESCE(u_updated.nick_name, u_created.nick_name, b.updated_by, b.created_by) as editor_name
+					FROM sys_buildings b
+					LEFT JOIN sys_user u_created ON b.created_by = u_created.username
+					LEFT JOIN sys_user u_updated ON b.updated_by = u_updated.username
+					WHERE b.deleted_at IS NULL`
+		}
 		args := []interface{}{}
 
 		if name != "" {
-			query += " AND name LIKE ?"
+			query += " AND b.name LIKE ?"
 			args = append(args, "%"+name+"%")
 		}
 		if city != "" {
-			query += " AND city = ?"
+			query += " AND b.city = ?"
 			args = append(args, city)
 		}
 		if district != "" {
-			query += " AND district = ?"
+			query += " AND b.district = ?"
 			args = append(args, district)
 		}
 		if businessArea != "" {
-			query += " AND business_area = ?"
+			query += " AND b.business_area = ?"
 			args = append(args, businessArea)
 		}
 		if status != "" {
-			query += " AND status = ?"
+			query += " AND b.status = ?"
 			args = append(args, status)
 		}
 
-		query += " ORDER BY rent_count DESC, created_at ASC LIMIT ? OFFSET ?"
+		query += " ORDER BY b.rent_count DESC, b.created_at ASC LIMIT ? OFFSET ?"
 		args = append(args, pageSizeNum, offset)
 
 		var buildings []map[string]interface{}
@@ -70,28 +90,33 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		// 获取总数
-		countQuery := "SELECT COUNT(*) FROM sys_buildings WHERE deleted_at IS NULL"
+		// 获取总数 - 根据deleted参数决定查询条件
+		var countQuery string
+		if deleted == "true" {
+			countQuery = "SELECT COUNT(*) FROM sys_buildings b WHERE b.deleted_at IS NOT NULL"
+		} else {
+			countQuery = "SELECT COUNT(*) FROM sys_buildings b WHERE b.deleted_at IS NULL"
+		}
 		countArgs := []interface{}{}
 
 		if name != "" {
-			countQuery += " AND name LIKE ?"
+			countQuery += " AND b.name LIKE ?"
 			countArgs = append(countArgs, "%"+name+"%")
 		}
 		if city != "" {
-			countQuery += " AND city = ?"
+			countQuery += " AND b.city = ?"
 			countArgs = append(countArgs, city)
 		}
 		if district != "" {
-			countQuery += " AND district = ?"
+			countQuery += " AND b.district = ?"
 			countArgs = append(countArgs, district)
 		}
 		if businessArea != "" {
-			countQuery += " AND business_area = ?"
+			countQuery += " AND b.business_area = ?"
 			countArgs = append(countArgs, businessArea)
 		}
 		if status != "" {
-			countQuery += " AND status = ?"
+			countQuery += " AND b.status = ?"
 			countArgs = append(countArgs, status)
 		}
 
@@ -158,9 +183,12 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			buildingData.Status = "active"
 		}
 
+		// 获取当前用户 (暂时使用admin)
+		currentUser := "admin" // TODO: 从JWT token或上下文中获取真实用户
+
 		// 插入数据库
 		result := database.DB.Exec(
-			"INSERT INTO sys_buildings (name, city, district, business_area, property_type, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+			"INSERT INTO sys_buildings (name, city, district, business_area, property_type, description, status, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
 			buildingData.Name,
 			buildingData.City,
 			buildingData.District,
@@ -168,6 +196,8 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			buildingData.PropertyType,
 			buildingData.Description,
 			buildingData.Status,
+			currentUser,
+			currentUser,
 		)
 
 		if result.Error != nil {
@@ -265,9 +295,14 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			values = append(values, buildingData.Status)
 		}
 
-		// 总是更新 updated_at
+		// 获取当前用户 (暂时使用admin)
+		currentUser := "admin" // TODO: 从JWT token或上下文中获取真实用户
+
+		// 总是更新 updated_at 和 updated_by
 		setParts = append(setParts, "updated_at = ?")
 		values = append(values, time.Now())
+		setParts = append(setParts, "updated_by = ?")
+		values = append(values, currentUser)
 		// 注意：id 参数放在最后
 		values = append(values, id)
 
@@ -533,6 +568,96 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			"code":    200,
 			"message": "获取商圈列表成功",
 			"data":    businessAreas,
+		})
+	})
+
+	// 恢复楼盘（软删除恢复）
+	api.POST("/buildings/:id/restore", func(c *gin.Context) {
+		id := c.Param("id")
+
+		// 验证ID
+		if id == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "楼盘ID不能为空",
+			})
+			return
+		}
+
+		// 恢复楼盘（将deleted_at设置为NULL）
+		result := database.DB.Exec("UPDATE sys_buildings SET deleted_at = NULL, updated_at = NOW() WHERE id = ? AND deleted_at IS NOT NULL", id)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "恢复楼盘失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "未找到可恢复的楼盘",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "恢复楼盘成功",
+		})
+	})
+
+	// 永久删除楼盘
+	api.DELETE("/buildings/:id/permanent", func(c *gin.Context) {
+		id := c.Param("id")
+
+		// 验证ID
+		if id == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "楼盘ID不能为空",
+			})
+			return
+		}
+
+		// 检查楼盘是否已被软删除
+		var count int64
+		database.DB.Raw("SELECT COUNT(*) FROM sys_buildings WHERE id = ? AND deleted_at IS NOT NULL", id).Scan(&count)
+
+		if count == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "只能永久删除已在回收站的楼盘",
+			})
+			return
+		}
+
+		// 永久删除楼盘（物理删除）
+		result := database.DB.Exec("DELETE FROM sys_buildings WHERE id = ? AND deleted_at IS NOT NULL", id)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "永久删除楼盘失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "未找到可删除的楼盘",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "永久删除楼盘成功",
 		})
 	})
 }

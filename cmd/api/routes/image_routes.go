@@ -3,6 +3,8 @@ package routes
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/models/image"
@@ -424,15 +426,54 @@ func SetupImageRoutes(api *gin.RouterGroup) {
 
 	// 上传楼盘户型图（兼容旧接口）
 	api.POST("/upload/floor-plan", func(c *gin.Context) {
-		// 获取用户ID
-		userID, exists := c.Get("user_id")
-		if !exists {
+		// 从请求头获取token并验证
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
-				"message": "未授权访问",
+				"message": "未提供认证信息",
 			})
 			return
 		}
+
+		// 提取token
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "认证格式错误",
+			})
+			return
+		}
+
+		// 解析token
+		jwtInstance := &utils.JWT{
+			Config: utils.JWTConfig{
+				Secret:  "rentpro-admin-secret-key",
+				Timeout: 86400, // 24 hours in seconds
+			},
+		}
+		claims, err := jwtInstance.ParseToken(tokenString)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "token无效",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		// 检查token是否过期
+		if claims.ExpiresAt != nil && time.Now().Unix() > claims.ExpiresAt.Unix() {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "token已过期",
+			})
+			return
+		}
+
+		// 获取用户ID
+		userID := claims.UserID
 
 		// 获取户型ID
 		houseTypeIDStr := c.PostForm("house_type_id")
@@ -488,7 +529,7 @@ func SetupImageRoutes(api *gin.RouterGroup) {
 		}
 
 		// 上传楼盘户型图
-		img, err := imageManager.UploadBuildingFloorPlan(file, uint64(houseType.BuildingID), houseTypeID, userID.(uint64))
+		img, err := imageManager.UploadBuildingFloorPlan(file, uint64(houseType.BuildingID), houseTypeID, uint64(userID))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -502,7 +543,7 @@ func SetupImageRoutes(api *gin.RouterGroup) {
 		updateResult := database.DB.Model(&struct{}{}).Table("sys_house_types").Where("id = ?", houseTypeID).Update("floor_plan_url", img.URL)
 		if updateResult.Error != nil {
 			// 如果数据库更新失败，删除已上传的文件
-			imageManager.DeleteImage(img.ID, userID.(uint64))
+			imageManager.DeleteImage(img.ID, uint64(userID))
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新数据库失败",
