@@ -211,6 +211,24 @@ func (q *QiniuService) GetFileInfo(key string) (*storage.FileInfo, error) {
 	return &fileInfo, nil
 }
 
+// UploadText 上传文本内容到七牛云
+func (q *QiniuService) UploadText(key string, content string) error {
+	upToken := q.GenerateUploadToken(key, 3600) // 1小时有效期
+
+	formUploader := storage.NewFormUploader(&q.config)
+	ret := storage.PutRet{}
+
+	// 使用字符串内容直接上传
+	putExtra := storage.PutExtra{}
+
+	err := formUploader.Put(context.Background(), &ret, upToken, key, strings.NewReader(content), int64(len(content)), &putExtra)
+	if err != nil {
+		return fmt.Errorf("上传文本内容失败: %v", err)
+	}
+
+	return nil
+}
+
 // GenerateUploadToken 生成上传Token（供前端直传使用）
 func (q *QiniuService) GenerateUploadToken(key string, expires int64) string {
 	putPolicy := storage.PutPolicy{

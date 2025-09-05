@@ -3,6 +3,8 @@ package routes
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/utils"
@@ -28,7 +30,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		offset := (pageNum - 1) * pageSizeNum
 
 		// 构建查询条件
-		query := "SELECT id, name, district, business_area, property_type, status, created_at FROM sys_buildings WHERE 1=1"
+		query := "SELECT id, name, district, business_area, property_type, status, rent_count, created_at FROM sys_buildings WHERE deleted_at IS NULL"
 		args := []interface{}{}
 
 		if name != "" {
@@ -48,7 +50,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			args = append(args, status)
 		}
 
-		query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+		query += " ORDER BY rent_count DESC, created_at ASC LIMIT ? OFFSET ?"
 		args = append(args, pageSizeNum, offset)
 
 		var buildings []map[string]interface{}
@@ -64,7 +66,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		}
 
 		// 获取总数
-		countQuery := "SELECT COUNT(*) FROM sys_buildings WHERE 1=1"
+		countQuery := "SELECT COUNT(*) FROM sys_buildings WHERE deleted_at IS NULL"
 		countArgs := []interface{}{}
 
 		if name != "" {
@@ -102,7 +104,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		id := c.Param("id")
 
 		var building map[string]interface{}
-		result := database.DB.Table("sys_buildings").Where("id = ?", id).First(&building)
+		result := database.DB.Table("sys_buildings").Where("id = ? AND deleted_at IS NULL", id).First(&building)
 
 		if result.Error != nil {
 			c.JSON(http.StatusNotFound, gin.H{
@@ -124,18 +126,13 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 
 		// 解析请求体
 		var buildingData struct {
-			Name            string `json:"name" binding:"required"`
-			Developer       string `json:"developer"`
-			DetailedAddress string `json:"detailedAddress" binding:"required"`
-			City            string `json:"city" binding:"required"`
-			District        string `json:"district" binding:"required"`
-			BusinessArea    string `json:"businessArea"`
-			SubDistrict     string `json:"subDistrict"`
-			PropertyType    string `json:"propertyType"`
-			PropertyCompany string `json:"propertyCompany"`
-			Description     string `json:"description"`
-			Status          string `json:"status"`
-			IsHot           bool   `json:"isHot"`
+			Name         string `json:"name" binding:"required"`
+			City         string `json:"city" binding:"required"`
+			District     string `json:"district" binding:"required"`
+			BusinessArea string `json:"businessArea"`
+			PropertyType string `json:"propertyType"`
+			Description  string `json:"description"`
+			Status       string `json:"status"`
 		}
 
 		if err := c.ShouldBindJSON(&buildingData); err != nil {
@@ -147,21 +144,21 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			return
 		}
 
+		// 设置默认值
+		if buildingData.Status == "" {
+			buildingData.Status = "active"
+		}
+
 		// 插入数据库
 		result := database.DB.Exec(
-			"INSERT INTO sys_buildings (name, developer, detailed_address, city, district, business_area, sub_district, property_type, property_company, description, status, is_hot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+			"INSERT INTO sys_buildings (name, city, district, business_area, property_type, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
 			buildingData.Name,
-			buildingData.Developer,
-			buildingData.DetailedAddress,
 			buildingData.City,
 			buildingData.District,
 			buildingData.BusinessArea,
-			buildingData.SubDistrict,
 			buildingData.PropertyType,
-			buildingData.PropertyCompany,
 			buildingData.Description,
 			buildingData.Status,
-			buildingData.IsHot,
 		)
 
 		if result.Error != nil {
@@ -190,19 +187,14 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			"code":    201,
 			"message": "楼盘创建成功",
 			"data": gin.H{
-				"id":              newBuildingID,
-				"name":            buildingData.Name,
-				"developer":       buildingData.Developer,
-				"detailedAddress": buildingData.DetailedAddress,
-				"city":            buildingData.City,
-				"district":        buildingData.District,
-				"businessArea":    buildingData.BusinessArea,
-				"subDistrict":     buildingData.SubDistrict,
-				"propertyType":    buildingData.PropertyType,
-				"propertyCompany": buildingData.PropertyCompany,
-				"description":     buildingData.Description,
-				"status":          buildingData.Status,
-				"isHot":           buildingData.IsHot,
+				"id":           newBuildingID,
+				"name":         buildingData.Name,
+				"city":         buildingData.City,
+				"district":     buildingData.District,
+				"businessArea": buildingData.BusinessArea,
+				"propertyType": buildingData.PropertyType,
+				"description":  buildingData.Description,
+				"status":       buildingData.Status,
 			},
 		})
 	})
@@ -213,18 +205,13 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 
 		// 解析请求体
 		var buildingData struct {
-			Name            string `json:"name"`
-			Developer       string `json:"developer"`
-			DetailedAddress string `json:"detailedAddress"`
-			City            string `json:"city"`
-			District        string `json:"district"`
-			BusinessArea    string `json:"businessArea"`
-			SubDistrict     string `json:"subDistrict"`
-			PropertyType    string `json:"propertyType"`
-			PropertyCompany string `json:"propertyCompany"`
-			Description     string `json:"description"`
-			Status          string `json:"status"`
-			IsHot           bool   `json:"isHot"`
+			Name         string `json:"name"`
+			City         string `json:"city"`
+			District     string `json:"district"`
+			BusinessArea string `json:"businessArea"`
+			PropertyType string `json:"propertyType"`
+			Description  string `json:"description"`
+			Status       string `json:"status"`
 		}
 
 		if err := c.ShouldBindJSON(&buildingData); err != nil {
@@ -236,45 +223,48 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		// 构建更新数据
-		updateData := make(map[string]interface{})
+		// 构建SQL更新语句
+		setParts := []string{}
+		values := []interface{}{}
+
 		if buildingData.Name != "" {
-			updateData["name"] = buildingData.Name
-		}
-		if buildingData.Developer != "" {
-			updateData["developer"] = buildingData.Developer
-		}
-		if buildingData.DetailedAddress != "" {
-			updateData["detailed_address"] = buildingData.DetailedAddress
+			setParts = append(setParts, "name = ?")
+			values = append(values, buildingData.Name)
 		}
 		if buildingData.City != "" {
-			updateData["city"] = buildingData.City
+			setParts = append(setParts, "city = ?")
+			values = append(values, buildingData.City)
 		}
 		if buildingData.District != "" {
-			updateData["district"] = buildingData.District
+			setParts = append(setParts, "district = ?")
+			values = append(values, buildingData.District)
 		}
 		if buildingData.BusinessArea != "" {
-			updateData["business_area"] = buildingData.BusinessArea
-		}
-		if buildingData.SubDistrict != "" {
-			updateData["sub_district"] = buildingData.SubDistrict
+			setParts = append(setParts, "business_area = ?")
+			values = append(values, buildingData.BusinessArea)
 		}
 		if buildingData.PropertyType != "" {
-			updateData["property_type"] = buildingData.PropertyType
-		}
-		if buildingData.PropertyCompany != "" {
-			updateData["property_company"] = buildingData.PropertyCompany
+			setParts = append(setParts, "property_type = ?")
+			values = append(values, buildingData.PropertyType)
 		}
 		if buildingData.Description != "" {
-			updateData["description"] = buildingData.Description
+			setParts = append(setParts, "description = ?")
+			values = append(values, buildingData.Description)
 		}
 		if buildingData.Status != "" {
-			updateData["status"] = buildingData.Status
+			setParts = append(setParts, "status = ?")
+			values = append(values, buildingData.Status)
 		}
-		updateData["is_hot"] = buildingData.IsHot
-		updateData["updated_at"] = "NOW()"
 
-		result := database.DB.Table("sys_buildings").Where("id = ?", id).Updates(updateData)
+		// 总是更新 updated_at
+		setParts = append(setParts, "updated_at = ?")
+		values = append(values, time.Now())
+		// 注意：id 参数放在最后
+		values = append(values, id)
+
+		// 执行原生SQL更新
+		sql := "UPDATE sys_buildings SET " + strings.Join(setParts, ", ") + " WHERE id = ?"
+		result := database.DB.Exec(sql, values...)
 
 		if result.Error != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -295,7 +285,33 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 	api.DELETE("/buildings/:id", func(c *gin.Context) {
 		id := c.Param("id")
 
-		// 删除数据库记录
+		// 检查楼盘是否存在
+		var buildingExists int64
+		database.DB.Raw("SELECT COUNT(*) FROM sys_buildings WHERE id = ? AND deleted_at IS NULL", id).Scan(&buildingExists)
+		if buildingExists == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "楼盘不存在",
+			})
+			return
+		}
+
+		// 检查是否有关联的户型数据
+		var houseTypeCount int64
+		database.DB.Raw("SELECT COUNT(*) FROM sys_house_types WHERE building_id = ? AND deleted_at IS NULL", id).Scan(&houseTypeCount)
+
+		if houseTypeCount > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "该楼盘下还有户型数据，无法删除",
+				"data": gin.H{
+					"house_type_count": houseTypeCount,
+				},
+			})
+			return
+		}
+
+		// 删除数据库记录（软删除）
 		result := database.DB.Exec("UPDATE sys_buildings SET deleted_at = NOW() WHERE id = ?", id)
 
 		if result.Error != nil {
@@ -421,6 +437,60 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 			"code":    200,
 			"message": "获取楼盘户型图成功",
 			"data":    images,
+		})
+	})
+
+	// 获取区域列表
+	api.GET("/districts", func(c *gin.Context) {
+		var districts []map[string]interface{}
+		result := database.DB.Raw("SELECT id, code, name, city_code, sort, status FROM sys_districts WHERE status = 'active' ORDER BY sort ASC").Scan(&districts)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取区域列表失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "获取区域列表成功",
+			"data":    districts,
+		})
+	})
+
+	// 获取商圈列表
+	api.GET("/business-areas", func(c *gin.Context) {
+		districtId := c.Query("districtId")
+
+		query := "SELECT id, code, name, district_id, city_code, sort, status FROM sys_business_areas WHERE status = 'active'"
+		args := []interface{}{}
+
+		if districtId != "" {
+			query += " AND district_id = ?"
+			args = append(args, districtId)
+		}
+
+		query += " ORDER BY sort ASC"
+
+		var businessAreas []map[string]interface{}
+		result := database.DB.Raw(query, args...).Scan(&businessAreas)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取商圈列表失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "获取商圈列表成功",
+			"data":    businessAreas,
 		})
 	})
 }

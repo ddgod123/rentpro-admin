@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"mime/multipart"
+	"strings"
 	"time"
 
 	"rentPro/rentpro-admin/common/database"
@@ -423,11 +424,8 @@ func (im *ImageManager) GetBuildingFloorPlans(buildingID uint64) ([]*image.SysIm
 	return im.GetBuildingImages(buildingID, "floor_plan")
 }
 
-// CreateBuildingFolder 创建楼盘文件夹结构（逻辑上的，不是实际文件系统）
+// CreateBuildingFolder 创建楼盘文件夹结构并在七牛云上创建相关目录
 func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName string) error {
-	// 在数据库中记录楼盘文件夹创建信息
-	// 这里可以添加一些初始化数据或配置
-
 	// 验证楼盘是否存在
 	var count int64
 	if err := im.db.Table("sys_buildings").Where("id = ?", buildingID).Count(&count).Error; err != nil {
@@ -438,13 +436,121 @@ func (im *ImageManager) CreateBuildingFolder(buildingID uint64, buildingName str
 		return fmt.Errorf("楼盘不存在: %d", buildingID)
 	}
 
-	// 可以在这里添加楼盘文件夹的初始化配置
-	fmt.Printf("✅ 楼盘文件夹结构创建完成: 楼盘ID=%d, 名称=%s\n", buildingID, buildingName)
-	fmt.Printf("📁 文件夹结构: buildings/%d/\n", buildingID)
-	fmt.Printf("   ├── floor-plans/     (户型图)\n", buildingID)
-	fmt.Printf("   ├── images/          (楼盘图片)\n", buildingID)
-	fmt.Printf("   └── documents/       (相关文档)\n", buildingID)
+	// 定义楼盘文件夹结构
+	folderStructure := map[string]string{
+		"floor-plans":     "户型图",
+		"site-plans":      "小区平面图",
+		"environment":     "小区环境图",
+		"building-images": "楼盘外观图",
+		"interior":        "室内样板图",
+		"facilities":      "配套设施图",
+		"documents":       "相关文档",
+	}
 
+	// 在七牛云上创建文件夹标记文件
+	if err := im.createQiniuFolderStructure(buildingID, buildingName, folderStructure); err != nil {
+		fmt.Printf("⚠️  七牛云文件夹创建失败: %v\n", err)
+		// 不阻止楼盘创建，只记录错误
+	}
+
+	// 在数据库中记录楼盘文件夹信息
+	if err := im.recordBuildingFolderInfo(buildingID, buildingName, folderStructure); err != nil {
+		fmt.Printf("⚠️  数据库文件夹信息记录失败: %v\n", err)
+	}
+
+	// 处理楼盘名称用于显示
+	safeBuildingName := im.sanitizeFolderName(buildingName)
+	buildingFolderName := fmt.Sprintf("%d-%s", buildingID, safeBuildingName)
+
+	fmt.Printf("✅ 楼盘文件夹结构创建完成: 楼盘ID=%d, 名称=%s\n", buildingID, buildingName)
+	fmt.Printf("📁 文件夹结构: buildings/%s/\n", buildingFolderName)
+	for folder, desc := range folderStructure {
+		fmt.Printf("   ├── %s/     (%s)\n", folder, desc)
+	}
+
+	return nil
+}
+
+// createQiniuFolderStructure 在七牛云上创建文件夹结构
+func (im *ImageManager) createQiniuFolderStructure(buildingID uint64, buildingName string, folders map[string]string) error {
+	if im.qiniuService == nil {
+		return fmt.Errorf("七牛云服务未初始化")
+	}
+
+	// 处理楼盘名称，确保适合作为文件夹名称
+	safeBuildingName := im.sanitizeFolderName(buildingName)
+	buildingFolderName := fmt.Sprintf("%d-%s", buildingID, safeBuildingName)
+
+	// 为每个文件夹创建一个标记文件（因为七牛云不支持空文件夹）
+	for folder, desc := range folders {
+		// 创建文件夹标记文件的key，使用新的命名格式
+		folderKey := fmt.Sprintf("buildings/%s/%s/.folder", buildingFolderName, folder)
+
+		// 创建标记文件内容
+		content := fmt.Sprintf(`{
+  "building_id": %d,
+  "building_name": "%s",
+  "building_folder_name": "%s",
+  "folder_type": "%s",
+  "description": "%s",
+  "created_at": "%s",
+  "purpose": "This file marks the existence of this folder structure"
+}`, buildingID, buildingName, buildingFolderName, folder, desc, time.Now().Format("2006-01-02 15:04:05"))
+
+		// 上传标记文件到七牛云
+		if err := im.qiniuService.UploadText(folderKey, content); err != nil {
+			fmt.Printf("⚠️  创建文件夹标记失败 %s: %v\n", folder, err)
+			continue
+		}
+
+		fmt.Printf("📁 创建七牛云文件夹: buildings/%s/%s/\n", buildingFolderName, folder)
+	}
+
+	return nil
+}
+
+// sanitizeFolderName 清理楼盘名称，确保适合作为文件夹名称
+func (im *ImageManager) sanitizeFolderName(name string) string {
+	// 替换不适合文件夹名称的字符
+	replacements := map[string]string{
+		" ":  "-", // 空格替换为横线
+		"/":  "-", // 斜杠替换为横线
+		"\\": "-", // 反斜杠替换为横线
+		":":  "-", // 冒号替换为横线
+		"*":  "-", // 星号替换为横线
+		"?":  "-", // 问号替换为横线
+		"\"": "-", // 双引号替换为横线
+		"<":  "-", // 小于号替换为横线
+		">":  "-", // 大于号替换为横线
+		"|":  "-", // 竖线替换为横线
+		"（":  "(", // 中文括号替换为英文括号
+		"）":  ")", // 中文括号替换为英文括号
+		"【":  "[", // 中文方括号替换为英文方括号
+		"】":  "]", // 中文方括号替换为英文方括号
+	}
+
+	result := name
+	for old, new := range replacements {
+		result = strings.ReplaceAll(result, old, new)
+	}
+
+	// 限制长度，避免文件夹名称过长
+	if len(result) > 50 {
+		// 截取前50个字符，但确保不会截断中文字符
+		runes := []rune(result)
+		if len(runes) > 50 {
+			result = string(runes[:50])
+		}
+	}
+
+	return result
+}
+
+// recordBuildingFolderInfo 在数据库中记录楼盘文件夹信息
+func (im *ImageManager) recordBuildingFolderInfo(buildingID uint64, buildingName string, folders map[string]string) error {
+	// 可以在这里创建一个楼盘文件夹配置表来记录文件夹结构信息
+	// 暂时只在日志中记录
+	fmt.Printf("📝 记录楼盘文件夹信息: ID=%d, 名称=%s, 文件夹数量=%d\n", buildingID, buildingName, len(folders))
 	return nil
 }
 
