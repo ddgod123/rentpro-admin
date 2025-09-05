@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,8 +19,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"rentPro/rentpro-admin/common/config"
 	"rentPro/rentpro-admin/common/database"
 	"rentPro/rentpro-admin/common/global"
+	"rentPro/rentpro-admin/common/initialize"
 	"rentPro/rentpro-admin/common/models/rental"
 	"rentPro/rentpro-admin/common/models/system"
 	"rentPro/rentpro-admin/common/utils"
@@ -116,6 +119,15 @@ func run() error {
 	// 初始化数据库连接
 	fmt.Println("初始化数据库连接...")
 	database.Setup()
+
+	// 初始化七牛云服务
+	fmt.Println("初始化七牛云服务...")
+	// TODO: 取消注释以启用七牛云服务
+	err = initialize.InitQiniu(config.Settings.Application.Mode)
+	if err != nil {
+		log.Printf("⚠️  七牛云服务初始化失败: %v", err)
+		log.Println("将使用本地文件存储")
+	}
 
 	// 设置Gin模式
 	if config.Settings.Application.Mode == "prod" {
@@ -1161,61 +1173,131 @@ func setupRoutes(router *gin.Engine) {
 				return
 			}
 
-			// 检查文件类型
-			if !strings.HasPrefix(file.Header.Get("Content-Type"), "image/") {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"code":    400,
-					"message": "只支持图片文件",
+			// 获取七牛云服务
+			qiniuService := utils.GetQiniuService()
+			if qiniuService == nil {
+				// 如果七牛云服务不可用，回退到本地存储
+				log.Println("七牛云服务不可用，使用本地存储")
+
+				// 检查文件类型
+				if !strings.HasPrefix(file.Header.Get("Content-Type"), "image/") {
+					c.JSON(http.StatusBadRequest, gin.H{
+						"code":    400,
+						"message": "只支持图片文件",
+					})
+					return
+				}
+
+				// 检查文件大小（5MB）
+				if file.Size > 5*1024*1024 {
+					c.JSON(http.StatusBadRequest, gin.H{
+						"code":    400,
+						"message": "文件大小不能超过5MB",
+					})
+					return
+				}
+
+				// 生成文件名
+				ext := filepath.Ext(file.Filename)
+				if ext == "" {
+					ext = ".jpg"
+				}
+				fileName := fmt.Sprintf("floor_plan_%s_%d%s", houseTypeID, time.Now().Unix(), ext)
+
+				// 确保上传目录存在
+				uploadDir := "uploads/floor-plans"
+				if err := os.MkdirAll(uploadDir, 0755); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "创建上传目录失败",
+						"error":   err.Error(),
+					})
+					return
+				}
+
+				// 保存文件
+				filePath := filepath.Join(uploadDir, fileName)
+				if err := c.SaveUploadedFile(file, filePath); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "保存文件失败",
+						"error":   err.Error(),
+					})
+					return
+				}
+
+				// 生成访问URL
+				fileURL := fmt.Sprintf("/uploads/floor-plans/%s", fileName)
+
+				// 更新数据库中的户型图URL
+				updateResult := database.DB.Model(&houseType).Update("floor_plan_url", fileURL)
+				if updateResult.Error != nil {
+					// 删除已上传的文件
+					os.Remove(filePath)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "更新数据库失败",
+						"error":   updateResult.Error.Error(),
+					})
+					return
+				}
+
+				c.JSON(http.StatusOK, gin.H{
+					"code":    200,
+					"message": "户型图上传成功",
+					"data": gin.H{
+						"url":      fileURL,
+						"filename": fileName,
+					},
 				})
 				return
 			}
 
-			// 检查文件大小（5MB）
-			if file.Size > 5*1024*1024 {
+			// 使用七牛云服务上传
+			// 验证文件
+			err = qiniuService.ValidateFile(file)
+			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{
 					"code":    400,
-					"message": "文件大小不能超过5MB",
+					"message": err.Error(),
 				})
 				return
 			}
 
-			// 生成文件名
-			ext := filepath.Ext(file.Filename)
-			if ext == "" {
-				ext = ".jpg"
-			}
-			fileName := fmt.Sprintf("floor_plan_%s_%d%s", houseTypeID, time.Now().Unix(), ext)
+			// 生成自定义文件名
+			customKey := fmt.Sprintf("floor_plan_%s_%d.jpg", houseTypeID, time.Now().Unix())
 
-			// 确保上传目录存在
-			uploadDir := "uploads/floor-plans"
-			if err := os.MkdirAll(uploadDir, 0755); err != nil {
+			// 上传到七牛云
+			uploadResult, err := qiniuService.UploadFile(file, customKey)
+			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
-					"message": "创建上传目录失败",
+					"message": "上传到七牛云失败",
 					"error":   err.Error(),
 				})
 				return
 			}
 
-			// 保存文件
-			filePath := filepath.Join(uploadDir, fileName)
-			if err := c.SaveUploadedFile(file, filePath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "保存文件失败",
-					"error":   err.Error(),
-				})
-				return
+			// 如果有旧的户型图，删除它
+			if houseType.FloorPlanUrl != "" {
+				oldKey := qiniuService.ExtractKeyFromURL(houseType.FloorPlanUrl)
+				if oldKey != "" {
+					err := qiniuService.DeleteFile(oldKey)
+					if err != nil {
+						log.Printf("删除旧户型图失败: %v", err)
+					}
+				}
 			}
 
-			// 生成访问URL
-			fileURL := fmt.Sprintf("/uploads/floor-plans/%s", fileName)
+			// 更新数据库
+			updateData := map[string]interface{}{
+				"floor_plan_url": uploadResult.OriginalURL,
+			}
 
-			// 更新数据库中的户型图URL
-			updateResult := database.DB.Model(&houseType).Update("floor_plan_url", fileURL)
+			updateResult := database.DB.Model(&houseType).Updates(updateData)
 			if updateResult.Error != nil {
-				// 删除已上传的文件
-				os.Remove(filePath)
+				// 如果数据库更新失败，尝试删除已上传的文件
+				qiniuService.DeleteFile(uploadResult.Key)
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "更新数据库失败",
@@ -1228,8 +1310,14 @@ func setupRoutes(router *gin.Engine) {
 				"code":    200,
 				"message": "户型图上传成功",
 				"data": gin.H{
-					"url":      fileURL,
-					"filename": fileName,
+					"key":           uploadResult.Key,
+					"hash":          uploadResult.Hash,
+					"size":          uploadResult.Size,
+					"original_url":  uploadResult.OriginalURL,
+					"thumbnail_url": uploadResult.ThumbnailURL,
+					"medium_url":    uploadResult.MediumURL,
+					"large_url":     uploadResult.LargeURL,
+					"styles":        uploadResult.Styles,
 				},
 			})
 		})
@@ -1249,12 +1337,28 @@ func setupRoutes(router *gin.Engine) {
 				return
 			}
 
-			// 删除文件（如果存在）
-			if houseType.FloorPlanUrl != "" {
-				// 构建文件路径
-				filePath := strings.TrimPrefix(houseType.FloorPlanUrl, "/")
-				if _, err := os.Stat(filePath); err == nil {
-					os.Remove(filePath)
+			// 获取七牛云服务
+			qiniuService := utils.GetQiniuService()
+			if qiniuService != nil {
+				// 使用七牛云服务删除文件
+				if houseType.FloorPlanUrl != "" {
+					key := qiniuService.ExtractKeyFromURL(houseType.FloorPlanUrl)
+					if key != "" {
+						err := qiniuService.DeleteFile(key)
+						if err != nil {
+							log.Printf("删除七牛云文件失败: %v", err)
+							// 继续执行数据库更新，不因为云端删除失败而中断
+						}
+					}
+				}
+			} else {
+				// 如果七牛云服务不可用，删除本地文件
+				if houseType.FloorPlanUrl != "" {
+					// 构建文件路径
+					filePath := strings.TrimPrefix(houseType.FloorPlanUrl, "/")
+					if _, err := os.Stat(filePath); err == nil {
+						os.Remove(filePath)
+					}
 				}
 			}
 
@@ -1322,6 +1426,32 @@ func setupRoutes(router *gin.Engine) {
 				"code":    200,
 				"message": "获取商圈列表成功",
 				"data":    businessAreas,
+			})
+		})
+
+		// 七牛云配置测试API
+		api.GET("/qiniu/config", func(c *gin.Context) {
+			qiniuConfig := config.GetQiniuConfig()
+			if qiniuConfig == nil {
+				c.JSON(http.StatusOK, gin.H{
+					"message": "七牛云配置未加载",
+					"config":  nil,
+				})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"message": "七牛云配置加载成功",
+				"config": map[string]interface{}{
+					"bucket":        qiniuConfig.Bucket,
+					"domain":        qiniuConfig.Domain,
+					"zone":          qiniuConfig.Zone,
+					"use_https":     qiniuConfig.UseHTTPS,
+					"use_cdn":       qiniuConfig.UseCdnDomains,
+					"max_file_size": qiniuConfig.Upload.MaxFileSize,
+					"allowed_types": qiniuConfig.Upload.AllowedTypes,
+					"upload_dir":    qiniuConfig.Upload.UploadDir,
+				},
 			})
 		})
 	}

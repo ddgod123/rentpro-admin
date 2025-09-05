@@ -36,6 +36,54 @@ settings:
     # - 123456: MySQL密码（请修改为您的实际密码）
     # - rentpro_admin: 数据库名（请确保该数据库已存在）
     source: root:123456@tcp(127.0.0.1:3306)/rentpro_admin?charset=utf8mb4&parseTime=True&loc=Local&timeout=1000ms
+  qiniu:
+    # 基础认证信息
+    access_key: "YRVDLN0uWnICy6OtDyWFy2OgJlUGQI2tMxGU13-z"          # 七牛云Access Key
+    secret_key: "6VAEYJIads4_EI5zjGhD0zSmy_d2IEdVmQCo3DLd"          # 七牛云Secret Key
+    
+    # 存储空间配置
+    bucket: "rentpro-floor-plans"               # 存储空间名称
+    domain: "t22v3tniy.hb-bkt.clouddn.com"                   # 绑定的域名（CDN域名或自定义域名）
+    
+    # 存储区域配置
+    zone: "huadong"                             # 存储区域：huadong(华东), huabei(华北), huanan(华南), beimei(北美)
+    
+    # 访问配置
+    use_https: true                             # 是否使用HTTPS
+    use_cdn_domains: true                       # 是否使用CDN域名加速
+    
+    # 上传配置
+    upload:
+      max_file_size: 5242880                    # 最大文件大小 5MB (5 * 1024 * 1024)
+      allowed_types:                            # 允许的文件类型
+        - "image/jpeg"
+        - "image/jpg" 
+        - "image/png"
+        - "image/gif"
+        - "image/webp"
+      upload_dir: "floor-plans"                 # 上传目录前缀
+    
+    # 图片处理样式配置
+    image_styles:
+      thumbnail:                                # 缩略图样式
+        name: "thumb"
+        process: "imageView2/1/w/200/h/150/q/85/format/jpg"
+        description: "缩略图 200x150"
+      
+      medium:                                   # 中等尺寸样式
+        name: "medium" 
+        process: "imageView2/1/w/800/h/600/q/85/format/jpg"
+        description: "中等尺寸 800x600"
+      
+      large:                                    # 大图样式
+        name: "large"
+        process: "imageView2/1/w/1200/h/900/q/90/format/jpg" 
+        description: "大图 1200x900"
+        
+      watermark:                                # 水印样式（可选）
+        name: "watermark"
+        process: "watermark/2/text/UmVudFBybw==/font/5b6u6L2v6ZuF6buR/fontsize/500/fill/I0VGRUZFRg==/dissolve/100/gravity/SouthEast/dx/10/dy/10"
+        description: "添加水印"
 #  databases:
 #    'locaohost:8000':
 #      driver: mysql
