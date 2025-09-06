@@ -1,0 +1,6 @@
+# rentPro/rentpro-admin/cmd/api/routes
+cmd/api/routes/city_routes.go:53:17: undefined: database.GetDB
+cmd/api/routes/city_routes.go:126:17: undefined: database.GetDB
+cmd/api/routes/city_routes.go:184:17: undefined: database.GetDB
+cmd/api/routes/city_routes.go:240:17: undefined: database.GetDB
+cmd/api/routes/city_routes.go:301:17: undefined: database.GetDB

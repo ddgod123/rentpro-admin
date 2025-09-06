@@ -266,6 +266,7 @@ func setupRoutes(router *gin.Engine) {
 		// 设置各个模块的路由
 		routes.SetupAuthRoutes(api)      // 认证相关路由
 		routes.SetupUserRoutes(api)      // 用户管理路由
+		routes.SetupCityRoutes(api)      // 城市管理路由
 		routes.SetupBuildingRoutes(api)  // 楼盘管理路由
 		routes.SetupHouseTypeRoutes(api) // 户型管理路由
 		routes.SetupImageRoutes(api)     // 图片管理路由

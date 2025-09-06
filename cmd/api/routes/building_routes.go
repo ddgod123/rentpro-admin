@@ -484,26 +484,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 		})
 	})
 
-	// 获取城市列表
-	api.GET("/cities", func(c *gin.Context) {
-		var cities []map[string]interface{}
-		result := database.DB.Raw("SELECT id, code, name, sort, status FROM sys_cities WHERE status = 'active' ORDER BY sort ASC").Scan(&cities)
-
-		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "获取城市列表失败",
-				"error":   result.Error.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"code":    200,
-			"message": "获取城市列表成功",
-			"data":    cities,
-		})
-	})
+	// 注意：城市列表API已移动到 city_routes.go 中的 /api/v1/cities
 
 	// 获取区域列表（支持按城市筛选）
 	api.GET("/districts", func(c *gin.Context) {
