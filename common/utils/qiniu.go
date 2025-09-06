@@ -84,7 +84,12 @@ func (q *QiniuService) UploadFile(file *multipart.FileHeader, customKey string) 
 	// 生成上传key
 	var key string
 	if customKey != "" {
-		key = q.configManager.GetUploadKey(customKey)
+		// 如果customKey以"楼盘管理/"开头，直接使用，不添加upload_dir前缀
+		if strings.HasPrefix(customKey, "楼盘管理/") {
+			key = customKey
+		} else {
+			key = q.configManager.GetUploadKey(customKey)
+		}
 	} else {
 		// 自动生成key
 		ext := filepath.Ext(file.Filename)
@@ -147,7 +152,12 @@ func (q *QiniuService) UploadFromPath(localPath string, customKey string) (*Uplo
 	// 生成上传key
 	var key string
 	if customKey != "" {
-		key = q.configManager.GetUploadKey(customKey)
+		// 如果customKey以"楼盘管理/"开头，直接使用，不添加upload_dir前缀
+		if strings.HasPrefix(customKey, "楼盘管理/") {
+			key = customKey
+		} else {
+			key = q.configManager.GetUploadKey(customKey)
+		}
 	} else {
 		// 使用文件名生成key
 		filename := filepath.Base(localPath)

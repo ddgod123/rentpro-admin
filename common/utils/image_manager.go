@@ -391,10 +391,22 @@ func (im *ImageManager) UploadBuildingFloorPlan(file *multipart.FileHeader, buil
 		return nil, fmt.Errorf("获取楼盘信息失败: %v", result.Error)
 	}
 
-	// 生成存储Key，使用新的文件夹结构：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/户型图/{文件名}
+	// 获取户型信息（名称和面积）
+	var houseType struct {
+		Name         string  `json:"name"`
+		StandardArea float64 `json:"standard_area"`
+	}
+	result = im.db.Table("sys_house_types").Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
+	if result.Error != nil {
+		return nil, fmt.Errorf("获取户型信息失败: %v", result.Error)
+	}
+
+	// 生成存储Key，使用已存在的楼盘文件夹结构：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/building-images/{户型名称-面积}/{文件名}
 	fileName := fmt.Sprintf("floor_plan_%d_%s", time.Now().UnixNano(), file.Filename)
 	sanitizedBuildingName := im.sanitizeFolderName(building.Name)
-	customKey := fmt.Sprintf("楼盘管理/%s/%d-%s/户型图/%s", building.City, building.ID, sanitizedBuildingName, fileName)
+	sanitizedHouseTypeName := im.sanitizeFolderName(houseType.Name)
+	houseTypeFolderName := fmt.Sprintf("%s-%.0f平米", sanitizedHouseTypeName, houseType.StandardArea)
+	customKey := fmt.Sprintf("楼盘管理/%s/%d-%s/building-images/%s/%s", building.City, building.ID, sanitizedBuildingName, houseTypeFolderName, fileName)
 
 	// 上传到七牛云
 	uploadResult, err := im.qiniuService.UploadFile(file, customKey)
@@ -688,6 +700,52 @@ func (im *ImageManager) recordBuildingFolderInfo(buildingID uint64, buildingName
 	// 可以在这里创建一个楼盘文件夹配置表来记录文件夹结构信息
 	// 暂时只在日志中记录
 	fmt.Printf("📝 记录楼盘文件夹信息: ID=%d, 名称=%s, 文件夹数量=%d\n", buildingID, buildingName, len(folders))
+	return nil
+}
+
+// CreateHouseTypeFolder 为新创建的户型在七牛云创建文件夹
+func (im *ImageManager) CreateHouseTypeFolder(buildingID uint64, houseTypeName string, standardArea float64) error {
+	// 获取楼盘信息
+	var building struct {
+		ID   uint64 `json:"id"`
+		Name string `json:"name"`
+		City string `json:"city"`
+	}
+	result := im.db.Table("sys_buildings").Where("id = ? AND deleted_at IS NULL", buildingID).First(&building)
+	if result.Error != nil {
+		return fmt.Errorf("获取楼盘信息失败: %v", result.Error)
+	}
+
+	// 生成文件夹路径
+	sanitizedBuildingName := im.sanitizeFolderName(building.Name)
+	sanitizedHouseTypeName := im.sanitizeFolderName(houseTypeName)
+	houseTypeFolderName := fmt.Sprintf("%s-%.0f平米", sanitizedHouseTypeName, standardArea)
+
+	// 构建完整路径：楼盘管理/{城市名}/{楼盘ID-楼盘名称}/building-images/{户型名称-面积}/
+	folderPath := fmt.Sprintf("楼盘管理/%s/%d-%s/building-images/%s", building.City, building.ID, sanitizedBuildingName, houseTypeFolderName)
+	folderKey := fmt.Sprintf("%s/.folder", folderPath)
+
+	// 创建文件夹标记文件内容
+	content := fmt.Sprintf(`{
+  "type": "house_type_folder",
+  "building_id": %d,
+  "building_name": "%s",
+  "city": "%s",
+  "house_type_name": "%s",
+  "standard_area": %.0f,
+  "folder_name": "%s",
+  "path": "%s",
+  "created_at": "%s",
+  "structure_version": "v2.0",
+  "purpose": "存储户型图片的文件夹"
+}`, building.ID, building.Name, building.City, houseTypeName, standardArea, houseTypeFolderName, folderPath, time.Now().Format("2006-01-02 15:04:05"))
+
+	// 上传标记文件到七牛云
+	if err := im.qiniuService.UploadText(folderKey, content); err != nil {
+		return fmt.Errorf("创建户型文件夹失败: %v", err)
+	}
+
+	fmt.Printf("📁 创建户型文件夹: %s/\n", folderPath)
 	return nil
 }
 

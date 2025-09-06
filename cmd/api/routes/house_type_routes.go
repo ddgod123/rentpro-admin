@@ -1,12 +1,14 @@
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"rentPro/rentpro-admin/common/database"
+	"rentPro/rentpro-admin/common/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -211,6 +213,13 @@ func SetupHouseTypeRoutes(api *gin.RouterGroup) {
 				"error":   result.Error.Error(),
 			})
 			return
+		}
+
+		// 在七牛云创建户型文件夹
+		imageManager := utils.GetImageManager()
+		if err := imageManager.CreateHouseTypeFolder(houseType.BuildingID, houseType.Name, houseType.StandardArea); err != nil {
+			// 记录错误但不影响户型创建成功
+			fmt.Printf("⚠️  创建户型文件夹失败: %v\n", err)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
