@@ -44,7 +44,7 @@ func SetupBuildingRoutes(api *gin.RouterGroup) {
 					WHERE b.deleted_at IS NOT NULL`
 		} else {
 			// 查询正常数据
-			query = `SELECT b.id, b.name, b.district, b.business_area, b.property_type, b.status, b.rent_count, 
+			query = `SELECT b.id, b.name, b.city, b.district, b.business_area, b.property_type, b.status, b.rent_count, 
 					b.created_at, b.updated_at, b.created_by, b.updated_by,
 					COALESCE(u_updated.nick_name, u_created.nick_name, b.updated_by, b.created_by) as editor_name
 					FROM sys_buildings b
