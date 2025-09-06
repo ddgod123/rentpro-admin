@@ -766,9 +766,8 @@ func (im *ImageManager) UploadHouseTypeFloorPlans(files []*multipart.FileHeader,
 		return nil, fmt.Errorf("查询现有图片数量失败: %v", err)
 	}
 
-	if existingCount+int64(len(files)) > 5 {
-		return nil, fmt.Errorf("户型图总数不能超过5张，当前已有%d张", existingCount)
-	}
+	// 用户需求：单次最多5张，总数不限
+	// 已在前端和API层面控制单次上传数量，此处不再限制总数
 
 	// 获取户型和楼盘信息
 	var houseType struct {
