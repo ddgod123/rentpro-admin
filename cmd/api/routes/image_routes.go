@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -565,6 +566,97 @@ func SetupImageRoutes(api *gin.RouterGroup) {
 				"building_id":   houseType.BuildingID,
 				"house_type_id": houseTypeID,
 			},
+		})
+	})
+
+	// 批量上传户型图（新的多图上传API）
+	api.POST("/upload/house-type-floor-plans", func(c *gin.Context) {
+		// 从表单获取用户ID
+		userIDStr := c.PostForm("user_id")
+		userID, err := strconv.Atoi(userIDStr)
+		if err != nil {
+			userID = 1 // 默认用户ID，实际应该从JWT token获取
+		}
+
+		// 从表单获取户型ID
+		houseTypeIDStr := c.PostForm("house_type_id")
+		houseTypeID, err := strconv.ParseUint(houseTypeIDStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "户型ID格式错误",
+			})
+			return
+		}
+
+		// 检查户型是否存在
+		var houseType struct {
+			ID         uint64 `json:"id"`
+			BuildingID uint   `json:"building_id"`
+			Name       string `json:"name"`
+		}
+		result := database.DB.Table("sys_house_types").Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
+		if result.Error != nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "户型不存在",
+			})
+			return
+		}
+
+		// 获取上传的文件列表
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "获取上传文件失败",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		files := form.File["files"]
+		if len(files) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "请选择要上传的图片",
+			})
+			return
+		}
+
+		if len(files) > 5 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "一次最多只能上传5张图片",
+			})
+			return
+		}
+
+		// 使用图片管理器上传多张户型图
+		imageManager := utils.GetImageManager()
+		if imageManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "图片管理器未初始化",
+			})
+			return
+		}
+
+		// 批量上传户型图
+		images, err := imageManager.UploadHouseTypeFloorPlans(files, houseTypeID, uint64(userID))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "上传户型图失败",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": fmt.Sprintf("成功上传%d张户型图", len(images)),
+			"data":    images,
 		})
 	})
 }

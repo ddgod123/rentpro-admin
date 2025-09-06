@@ -17,6 +17,7 @@ import (
 type HouseTypeResponse struct {
 	ID                  uint64    `json:"id" db:"id"`
 	BuildingID          uint64    `json:"building_id" db:"building_id"`
+	BuildingName        string    `json:"building_name" db:"building_name"`
 	Name                string    `json:"name" db:"name"`
 	Code                string    `json:"code" db:"code"`
 	Rooms               int64     `json:"rooms" db:"rooms"`
@@ -414,7 +415,7 @@ func SetupHouseTypeRoutes(api *gin.RouterGroup) {
 		offset := (page - 1) * pageSize
 
 		// 查询已删除的户型列表
-		query := `SELECT ht.id, ht.building_id, ht.name, ht.code, ht.rooms, ht.halls, ht.bathrooms, 
+		query := `SELECT ht.id, ht.building_id, COALESCE(b.name, '') as building_name, ht.name, ht.code, ht.rooms, ht.halls, ht.bathrooms, 
 				 COALESCE(ht.balconies, 0) as balconies,
 				 COALESCE(ht.maid_rooms, 0) as maid_rooms,
 				 ht.standard_area, 
@@ -426,6 +427,7 @@ func SetupHouseTypeRoutes(api *gin.RouterGroup) {
 				 COALESCE(ht.updated_by, '') as updated_by,
 				 COALESCE(u_updated.nick_name, u_created.nick_name, ht.updated_by, ht.created_by, '系统') as editor_name
 				 FROM sys_house_types ht
+				 LEFT JOIN sys_buildings b ON ht.building_id = b.id AND b.deleted_at IS NULL
 				 LEFT JOIN sys_user u_created ON ht.created_by = u_created.username
 				 LEFT JOIN sys_user u_updated ON ht.updated_by = u_updated.username
 				 WHERE ht.building_id = ? AND ht.deleted_at IS NOT NULL
@@ -536,6 +538,110 @@ func SetupHouseTypeRoutes(api *gin.RouterGroup) {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
 			"message": "永久删除户型成功",
+		})
+	})
+
+	// 获取户型的所有户型图
+	api.GET("/house-types/:id/floor-plans", func(c *gin.Context) {
+		idStr := c.Param("id")
+		houseTypeId, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的户型ID",
+			})
+			return
+		}
+
+		// 查询户型图片列表
+		query := `SELECT id, name, description, file_name, file_size, url, thumbnail_url, 
+				 medium_url, large_url, created_at, sort_order 
+				 FROM sys_images 
+				 WHERE module = 'house_floor_plan' AND module_id = ? AND deleted_at IS NULL 
+				 ORDER BY sort_order ASC, created_at ASC`
+
+		var images []map[string]interface{}
+		err = database.DB.Raw(query, houseTypeId).Scan(&images).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询户型图片失败",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "查询成功",
+			"data":    images,
+		})
+	})
+
+	// 删除单张户型图
+	api.DELETE("/house-types/:id/floor-plans/:imageId", func(c *gin.Context) {
+		idStr := c.Param("id")
+		houseTypeId, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的户型ID",
+			})
+			return
+		}
+
+		imageIdStr := c.Param("imageId")
+		imageId, err := strconv.ParseUint(imageIdStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的图片ID",
+			})
+			return
+		}
+
+		// TODO: 从JWT token获取真实用户
+		currentUser := "admin"
+
+		// 软删除图片记录
+		result := database.DB.Exec(
+			"UPDATE sys_images SET deleted_at = NOW(), updated_by = ? WHERE id = ? AND module = 'house_floor_plan' AND module_id = ? AND deleted_at IS NULL",
+			currentUser, imageId, houseTypeId)
+
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "删除户型图片失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "户型图片不存在",
+			})
+			return
+		}
+
+		// 更新户型表的 floor_plan_url（如果删除的是第一张图片，则设置为下一张图片的URL）
+		var firstImageUrl string
+		err = database.DB.Raw(
+			"SELECT url FROM sys_images WHERE module = 'house_floor_plan' AND module_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC LIMIT 1",
+			houseTypeId).Scan(&firstImageUrl).Error
+
+		if err == nil {
+			// 更新户型表的 floor_plan_url
+			database.DB.Exec("UPDATE sys_house_types SET floor_plan_url = ? WHERE id = ?", firstImageUrl, houseTypeId)
+		} else {
+			// 没有图片了，清空 floor_plan_url
+			database.DB.Exec("UPDATE sys_house_types SET floor_plan_url = NULL WHERE id = ?", houseTypeId)
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "删除户型图片成功",
 		})
 	})
 }

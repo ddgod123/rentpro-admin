@@ -749,6 +749,133 @@ func (im *ImageManager) CreateHouseTypeFolder(buildingID uint64, houseTypeName s
 	return nil
 }
 
+// UploadHouseTypeFloorPlans 上传户型图片（多图支持）
+func (im *ImageManager) UploadHouseTypeFloorPlans(files []*multipart.FileHeader, houseTypeID uint64, userID uint64) ([]*image.SysImage, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("没有上传文件")
+	}
+
+	if len(files) > 5 {
+		return nil, fmt.Errorf("最多只能上传5张户型图")
+	}
+
+	// 检查当前已有的图片数量
+	var existingCount int64
+	err := im.db.Table("sys_images").Where("module = 'house_floor_plan' AND module_id = ? AND deleted_at IS NULL", houseTypeID).Count(&existingCount).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询现有图片数量失败: %v", err)
+	}
+
+	if existingCount+int64(len(files)) > 5 {
+		return nil, fmt.Errorf("户型图总数不能超过5张，当前已有%d张", existingCount)
+	}
+
+	// 获取户型和楼盘信息
+	var houseType struct {
+		ID           uint64  `json:"id"`
+		BuildingID   uint64  `json:"building_id"`
+		Name         string  `json:"name"`
+		StandardArea float64 `json:"standard_area"`
+	}
+	result := im.db.Table("sys_house_types").Where("id = ? AND deleted_at IS NULL", houseTypeID).First(&houseType)
+	if result.Error != nil {
+		return nil, fmt.Errorf("获取户型信息失败: %v", result.Error)
+	}
+
+	var building struct {
+		ID   uint64 `json:"id"`
+		Name string `json:"name"`
+		City string `json:"city"`
+	}
+	result = im.db.Table("sys_buildings").Where("id = ? AND deleted_at IS NULL", houseType.BuildingID).First(&building)
+	if result.Error != nil {
+		return nil, fmt.Errorf("获取楼盘信息失败: %v", result.Error)
+	}
+
+	var uploadedImages []*image.SysImage
+	var sortOrder int
+
+	// 获取当前最大排序号
+	err = im.db.Raw("SELECT COALESCE(MAX(sort_order), 0) FROM sys_images WHERE module = 'house_floor_plan' AND module_id = ? AND deleted_at IS NULL", houseTypeID).Scan(&sortOrder).Error
+	if err != nil {
+		sortOrder = 0
+	}
+
+	// 依次上传每个文件
+	for i, file := range files {
+		// 验证文件
+		if err := im.qiniuService.ValidateFile(file); err != nil {
+			// 如果有文件上传失败，清理已上传的文件
+			for _, img := range uploadedImages {
+				im.DeleteImage(img.ID, userID)
+			}
+			return nil, err
+		}
+
+		// 生成存储Key
+		fileName := fmt.Sprintf("floor_plan_%d_%s", time.Now().UnixNano(), file.Filename)
+		sanitizedBuildingName := im.sanitizeFolderName(building.Name)
+		sanitizedHouseTypeName := im.sanitizeFolderName(houseType.Name)
+		houseTypeFolderName := fmt.Sprintf("%s-%.0f平米", sanitizedHouseTypeName, houseType.StandardArea)
+		customKey := fmt.Sprintf("楼盘管理/%s/%d-%s/building-images/%s/%s", building.City, building.ID, sanitizedBuildingName, houseTypeFolderName, fileName)
+
+		// 上传到七牛云
+		uploadResult, err := im.qiniuService.UploadFile(file, customKey)
+		if err != nil {
+			// 如果上传失败，清理已上传的文件
+			for _, img := range uploadedImages {
+				im.DeleteImage(img.ID, userID)
+			}
+			return nil, fmt.Errorf("上传到七牛云失败: %v", err)
+		}
+
+		// 保存到数据库
+		img := &image.SysImage{
+			Name:         file.Filename,
+			Description:  fmt.Sprintf("户型%s的户型图", houseType.Name),
+			FileName:     file.Filename,
+			FileSize:     file.Size,
+			MimeType:     file.Header.Get("Content-Type"),
+			Extension:    im.getFileExtension(file.Filename),
+			Key:          uploadResult.Key,
+			URL:          uploadResult.OriginalURL,
+			ThumbnailURL: uploadResult.ThumbnailURL,
+			MediumURL:    uploadResult.MediumURL,
+			LargeURL:     uploadResult.LargeURL,
+			Category:     "floor_plan",
+			Module:       "house_floor_plan",
+			ModuleID:     houseTypeID,
+			IsPublic:     true,
+			IsMain:       i == 0 && existingCount == 0, // 第一张图片且当前没有图片时设为主图
+			SortOrder:    sortOrder + i + 1,
+			Status:       "active",
+			CreatedBy:    userID,
+			UpdatedBy:    userID,
+		}
+
+		result := im.db.Create(img)
+		if result.Error != nil {
+			// 如果数据库保存失败，清理已上传的文件
+			for _, prevImg := range uploadedImages {
+				im.DeleteImage(prevImg.ID, userID)
+			}
+			return nil, fmt.Errorf("保存图片信息到数据库失败: %v", result.Error)
+		}
+
+		uploadedImages = append(uploadedImages, img)
+	}
+
+	// 如果这是第一批图片，更新户型表的 floor_plan_url
+	if existingCount == 0 && len(uploadedImages) > 0 {
+		err = im.db.Exec("UPDATE sys_house_types SET floor_plan_url = ? WHERE id = ?", uploadedImages[0].URL, houseTypeID).Error
+		if err != nil {
+			fmt.Printf("⚠️  更新户型表floor_plan_url失败: %v\n", err)
+		}
+	}
+
+	return uploadedImages, nil
+}
+
 // GetImageManager 获取图片管理器实例
 func GetImageManager() *ImageManager {
 	return ImageManagerInstance
