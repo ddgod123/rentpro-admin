@@ -376,4 +376,157 @@ func SetupHouseTypeRoutes(api *gin.RouterGroup) {
 			"message": "删除户型成功",
 		})
 	})
+
+	// 获取已删除的户型列表（回收站）
+	api.GET("/house-types/building/:buildingId/deleted", func(c *gin.Context) {
+		buildingIdStr := c.Param("buildingId")
+		buildingId, err := strconv.ParseUint(buildingIdStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的楼盘ID",
+			})
+			return
+		}
+
+		pageStr := c.DefaultQuery("page", "1")
+		pageSizeStr := c.DefaultQuery("pageSize", "10")
+
+		page, err := strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			page = 1
+		}
+
+		pageSize, err := strconv.Atoi(pageSizeStr)
+		if err != nil || pageSize < 1 || pageSize > 100 {
+			pageSize = 10
+		}
+
+		offset := (page - 1) * pageSize
+
+		// 查询已删除的户型列表
+		query := `SELECT ht.id, ht.building_id, ht.name, ht.code, ht.rooms, ht.halls, ht.bathrooms, 
+				 COALESCE(ht.balconies, 0) as balconies,
+				 COALESCE(ht.maid_rooms, 0) as maid_rooms,
+				 ht.standard_area, 
+				 COALESCE(ht.standard_orientation, '') as standard_orientation, 
+				 COALESCE(ht.floor_plan_url, '') as floor_plan_url,
+				 CASE WHEN ht.floor_plan_url IS NOT NULL AND ht.floor_plan_url != '' THEN true ELSE false END as has_floor_plan,
+				 ht.created_at, ht.updated_at, ht.deleted_at,
+				 COALESCE(ht.created_by, '') as created_by, 
+				 COALESCE(ht.updated_by, '') as updated_by,
+				 COALESCE(u_updated.nick_name, u_created.nick_name, ht.updated_by, ht.created_by, '系统') as editor_name
+				 FROM sys_house_types ht
+				 LEFT JOIN sys_user u_created ON ht.created_by = u_created.username
+				 LEFT JOIN sys_user u_updated ON ht.updated_by = u_updated.username
+				 WHERE ht.building_id = ? AND ht.deleted_at IS NOT NULL
+				 ORDER BY ht.deleted_at DESC
+				 LIMIT ? OFFSET ?`
+
+		var houseTypes []HouseTypeResponse
+		err = database.DB.Raw(query, buildingId, pageSize, offset).Scan(&houseTypes).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询已删除户型失败",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		// 查询总数
+		var total int64
+		countQuery := "SELECT COUNT(*) FROM sys_house_types WHERE building_id = ? AND deleted_at IS NOT NULL"
+		err = database.DB.Raw(countQuery, buildingId).Scan(&total).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询已删除户型总数失败",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "获取已删除户型列表成功",
+			"data":    houseTypes,
+			"total":   total,
+		})
+	})
+
+	// 恢复户型（取消软删除）
+	api.POST("/house-types/:id/restore", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的户型ID",
+			})
+			return
+		}
+
+		// TODO: 从JWT token获取真实用户
+		currentUser := "admin"
+
+		result := database.DB.Exec("UPDATE sys_house_types SET deleted_at = NULL, updated_by = ? WHERE id = ? AND deleted_at IS NOT NULL", currentUser, id)
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "恢复户型失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "户型不存在或未被删除",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "恢复户型成功",
+		})
+	})
+
+	// 永久删除户型
+	api.DELETE("/house-types/:id/permanent", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的户型ID",
+			})
+			return
+		}
+
+		result := database.DB.Exec("DELETE FROM sys_house_types WHERE id = ? AND deleted_at IS NOT NULL", id)
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "永久删除户型失败",
+				"error":   result.Error.Error(),
+			})
+			return
+		}
+
+		if result.RowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "户型不存在或未被删除",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "永久删除户型成功",
+		})
+	})
 }
